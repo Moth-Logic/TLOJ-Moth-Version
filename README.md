@@ -61,7 +61,7 @@ make
 
 ## Postscript
 
-This version of The Legend of June was developed collaboratively by me and several other contributors. Unfortunately, due to time constraints, it was never fully prepared for its original presentation. Nevertheless, I decided to finish the project and bring it to a completed state. While it may not have made it to the intended showcase, the work put into it deserves recognition. Credit where credit is due: everyone who contributed to making this project possible. The link for the original game is: "https://github.com/Moth-Logic/The-Legend-of-June"
+This version of The Legend of June was developed collaboratively by me and several other contributors. Unfortunately, due to time constraints, it was never fully prepared for its original presentation. Nevertheless, I decided to finish the project and bring it to a completed state. While it may not have made it to the intended showcase, the work put into it deserves recognition. Credit where credit is due: everyone who contributed to making this project possible. The link for the original game is: https://github.com/Moth-Logic/The-Legend-of-June
 
 ## Licencia
 

@@ -15,19 +15,6 @@ proyectiles, atacá con la espada y sobreviví oleadas cada vez más difíciles.
   <img src="https://img.shields.io/badge/Licencia-Unlicense-blue?style=for-the-badge&logo=opensourceinitiative&logoColor=white" alt="Unlicense">
 </p>
 
-Proyecto del curso **Arquitectura de Computadores** (TEC). Esta versión es la **Etapa 2**:
-el juego completo en C++ con ncurses, probado en Raspberry Pi 4 B.
-
-### Tecnologías
-
-| | Tecnología | Qué aporta |
-| :---: | :--- | :--- |
-| 🧠 | **C++17** | Todo el juego en un solo `main.cpp`: lógica, IA de enemigos y render. |
-| 🖥️ | **ncurses** | Dibujado en la terminal y lectura de teclado sin bloqueo. |
-| 🍓 | **Raspberry Pi 4 B** | Plataforma de prueba del rendimiento. |
-| ⚙️ | **GNU Make** | Compilación y objetivos `run`, `bench`, `bench-pantalla`. |
-| 📟 | **Punto fijo (8 bits)** | Posiciones y velocidades sin punto flotante. |
-
 ## Cómo se juega
 
 - 10 puntos de vida, dibujados como `[##########]`; cada golpe quita uno.
@@ -63,18 +50,6 @@ make
 
 `make run` compila y ejecuta en un paso.
 
-## Rendimiento
-
-```bash
-make bench              # N = 10, 20, 40 y 64, sin pantalla
-make bench-pantalla     # igual, pero midiendo también refresh() de ncurses
-./june --bench N        # una sola medición
-```
-
-Reporta microsegundos por cuadro (lógica, dibujado y `refresh()`), el costo aislado de
-`mover_entidades`, `colisiones` y `copiar_sprite`, y la fracción del cuadro que ocupan las
-rutinas (dato para la Ley de Amdahl). `--sin-pantalla` no dibuja, así que no mide `refresh()`.
-
 ## Equipo
 
 | Integrante |
@@ -83,6 +58,10 @@ rutinas (dato para la Ley de Amdahl). `--sin-pantalla` no dibuja, así que no mi
 | Sebastián Marín Mora |
 | Julián Solórzano Hernández |
 | Abril González Morales |
+
+## Postscript
+
+This version of The Legend of June was developed collaboratively by me and several other contributors. Unfortunately, due to time constraints, it was never fully prepared for its original presentation. Nevertheless, I decided to finish the project and bring it to a completed state. While it may not have made it to the intended showcase, the work put into it deserves recognition. Credit where credit is due: everyone who contributed to making this project possible. The link for the original game is: https://github.com/Moth-Logic/The-Legend-of-June
 
 ## Licencia
 

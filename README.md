@@ -5,8 +5,28 @@
 Juego ASCII de supervivencia para la terminal, inspirado en *The Legend of Zelda*. Esquivá
 proyectiles, atacá con la espada y sobreviví oleadas cada vez más difíciles.
 
+<p align="center">
+  <img src="https://img.shields.io/badge/C%2B%2B-17-00599C?style=for-the-badge&logo=cplusplus&logoColor=white" alt="C++17">
+  <img src="https://img.shields.io/badge/ncurses-UI-4E4E4E?style=for-the-badge&logo=gnometerminal&logoColor=white" alt="ncurses">
+  <img src="https://img.shields.io/badge/Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Linux">
+  <img src="https://img.shields.io/badge/Raspberry%20Pi%204%20B-A22846?style=for-the-badge&logo=raspberrypi&logoColor=white" alt="Raspberry Pi 4 B">
+  <img src="https://img.shields.io/badge/Make-427819?style=for-the-badge&logo=gnumake&logoColor=white" alt="GNU Make">
+  <img src="https://img.shields.io/badge/30%20FPS-punto%20fijo-8A2BE2?style=for-the-badge" alt="30 FPS, punto fijo">
+  <img src="https://img.shields.io/badge/Licencia-Unlicense-blue?style=for-the-badge&logo=opensourceinitiative&logoColor=white" alt="Unlicense">
+</p>
+
 Proyecto del curso **Arquitectura de Computadores** (TEC). Esta versión es la **Etapa 2**:
 el juego completo en C++ con ncurses, probado en Raspberry Pi 4 B.
+
+### Tecnologías
+
+| | Tecnología | Qué aporta |
+| :---: | :--- | :--- |
+| 🧠 | **C++17** | Todo el juego en un solo `main.cpp`: lógica, IA de enemigos y render. |
+| 🖥️ | **ncurses** | Dibujado en la terminal y lectura de teclado sin bloqueo. |
+| 🍓 | **Raspberry Pi 4 B** | Plataforma de prueba del rendimiento. |
+| ⚙️ | **GNU Make** | Compilación y objetivos `run`, `bench`, `bench-pantalla`. |
+| 📟 | **Punto fijo (8 bits)** | Posiciones y velocidades sin punto flotante. |
 
 ## Cómo se juega
 

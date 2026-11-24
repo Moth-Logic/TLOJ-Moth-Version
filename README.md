@@ -1,12 +1,19 @@
-# The Legend of June
+<p align="center">
+  <img src="ASSETS/LOGO.png" alt="The Legend of June" width="460">
+</p>
 
-Juego ASCII de supervivencia para la terminal, inspirado en The Legend of Zelda.
-Esquivá proyectiles, atacá con la espada y sobreviví oleadas de enemigos cada vez más difíciles.
-Tenés 10 puntos de vida, que se muestran como `[##########]` y bajan de a uno por golpe.
+Juego ASCII de supervivencia para la terminal, inspirado en *The Legend of Zelda*. Esquivá
+proyectiles, atacá con la espada y sobreviví oleadas cada vez más difíciles.
 
-Proyecto del curso **Arquitectura de Computadores** (TEC), en tres etapas: diseño, implementación
-en C++ y rutinas críticas en ensamblador ARM A32. Por ahora el repositorio tiene la **Etapa 2
-completa**: el juego ya se puede ejecutar (probado en Raspberry Pi 4 B).
+Proyecto del curso **Arquitectura de Computadores** (TEC). Esta versión es la **Etapa 2**:
+el juego completo en C++ con ncurses, probado en Raspberry Pi 4 B.
+
+## Cómo se juega
+
+- 10 puntos de vida, dibujados como `[##########]`; cada golpe quita uno.
+- Al morir, un enemigo puede soltar un corazón que recupera vida.
+- Tres tipos de enemigo: soldados, arqueros y magos.
+- La partida corre a 30 cuadros por segundo, sin punto flotante (posiciones en punto fijo).
 
 ## Controles
 
@@ -20,13 +27,13 @@ completa**: el juego ya se puede ejecutar (probado en Raspberry Pi 4 B).
 
 ## Mapas
 
-Quince mapas de 60×20 celdas en `mapa1.txt` … `mapa15.txt`: Clasico, Cruz, Cuatro cuartos,
+Quince mapas de 60×20 celdas, en `mapa1.txt` … `mapa15.txt`: Clasico, Cruz, Cuatro cuartos,
 Barras, Columnas, Serpiente, Pasillos, Anillos, Zigzag, Gemelos, Aspa, Fortaleza, Puertas,
 Espiral y Campos. Para crear uno propio, copiá cualquiera y respetá el tamaño.
 
-## Compilar
+## Compilar y ejecutar
 
-Necesitás g++ con C++17, ncurses y una terminal de al menos 80×24.
+Requisitos: g++ con C++17, ncurses y una terminal de al menos 80×24.
 
 ```bash
 sudo apt install build-essential libncurses-dev
@@ -34,7 +41,19 @@ make
 ./june
 ```
 
-Para medir el rendimiento: `make bench` (o `./june --bench N`).
+`make run` compila y ejecuta en un paso.
+
+## Rendimiento
+
+```bash
+make bench              # N = 10, 20, 40 y 64, sin pantalla
+make bench-pantalla     # igual, pero midiendo también refresh() de ncurses
+./june --bench N        # una sola medición
+```
+
+Reporta microsegundos por cuadro (lógica, dibujado y `refresh()`), el costo aislado de
+`mover_entidades`, `colisiones` y `copiar_sprite`, y la fracción del cuadro que ocupan las
+rutinas (dato para la Ley de Amdahl). `--sin-pantalla` no dibuja, así que no mide `refresh()`.
 
 ## Equipo
 

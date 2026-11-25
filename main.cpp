@@ -16,6 +16,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <clocale>
 #include <ncurses.h>
 #include <algorithm>
 #include <cstdio>
@@ -65,6 +66,22 @@ const int DESVIO_CUADROS = 45;
 const int PROB_CORAZON = 25;      // % de probabilidad de que un enemigo suelte un corazon
 const int VIDA_CORAZON = 450;     // cuadros que dura un corazon en el suelo (15 s)
 const int CORAZON_PARPADEA = 90;  // en los ultimos cuadros el corazon parpadea
+// Mejoras: la tienda aparece cada RONDAS_POR_TIENDA rondas completadas y el escudo
+// de emergencia se recarga en ESCUDO_RECARGA cuadros.
+const int RONDAS_POR_TIENDA = 3;
+const int ESCUDO_RECARGA = 300;
+
+// Jefe final: aparece despues de la oleada 5 en una arena vacia. Sus flechas
+// salen en una lluvia de 3 y las bombas tienen aviso antes de explotar.
+const int OLEADAS_ANTES_DEL_JEFE = 5;
+const int VIDA_JEFE = 60;
+const int JEFE_ESPERA_DISPARO = 90;   // cuadros entre lluvias de flechas (3 s)
+const int JEFE_ESPERA_BOMBA = 240;    // cuadros entre bombas (8 s)
+const int JEFE_FLECHAS = 3;
+const int MAX_BOMBAS = 2;
+const int BOMBA_AVISO = 45;           // cuadros de parpadeo antes de explotar (1.5 s)
+const int BOMBA_EXPLOSION = 10;       // cuadros que dura la explosion
+const int BOMBA_RADIO = 2;            // radio en celdas (cuadrado de 5x5)
 
 // Velocidades en punto fijo (celdas por cuadro x 256). Las celdas de la consola
 // son aprox. el doble de altas que de anchas, por eso la velocidad vertical es
@@ -74,12 +91,13 @@ const int32_t VEL_SOL_X = 48, VEL_SOL_Y = 24;
 const int32_t VEL_ARQ_X = 40, VEL_ARQ_Y = 20;
 const int32_t VEL_MAG_X = 36, VEL_MAG_Y = 18;
 const int32_t VEL_PROY_X = 96, VEL_PROY_Y = 48;
+const int32_t VEL_JEFE_X = 32, VEL_JEFE_Y = 16;
 
 // Direcciones, acciones que produce el Input Handler, tipos de enemigo y
 // estados de los enemigos.
 enum Dir { ARRIBA, ABAJO, IZQUIERDA, DERECHA };
-enum Accion { NADA, MOVER, ATACAR, PAUSA, SALIR, ENTER };
-enum TipoEnemigo { SOLDADO, ARQUERO, MAGO };
+enum Accion { NADA, MOVER, ATACAR, PAUSA, SALIR, ENTER, ELEGIR1, ELEGIR2, ELEGIR3 };
+enum TipoEnemigo { SOLDADO, ARQUERO, MAGO, JEFE };
 enum EstadoEnemigo { PERSEGUIR, DISPARAR, HERIDO };
 
 // Comando: lo que el Input Handler le entrega al Game Engine (accion + direccion).
@@ -137,6 +155,7 @@ public:
     Arena();
     bool cargar(const char* ruta);
     void generarPorDefecto();
+    void generarSoloBordes();
     bool esPared(int cx, int cy) const;
     bool lineaLibre(int x0, int y0, int x1, int y1) const;
     void libreCerca(int& cx, int& cy) const;
@@ -185,6 +204,70 @@ private:
     ActionMapper mapa;
 };
 
+// MEJORAS Y TIENDA
+// EfectosMejoras guarda los valores de combate que pueden cambiar las mejoras. Se
+// inicializa con los valores base del juego (VIDA_JUGADOR, GOLPE_ESPERA, ...), asi
+// que sin mejoras todo se comporta exactamente igual que antes.
+struct EfectosMejoras {
+    int vidaMax = VIDA_JUGADOR;
+    int esperaGolpe = GOLPE_ESPERA;
+    int danoEspada = 1;
+    int alcanceExtra = 0;
+    int inmuneCuadros = INMUNE_JUGADOR;
+    int empujeCeldas = EMPUJE_CELDAS;
+    int aturdirCuadros = ATURDIR_CUADROS;
+    int curacionCorazon = 1;
+    bool escudo = false;
+    bool escudoListo = false;
+    int escudoTimer = 0;
+};
+
+// Catalogo de mejoras. Cada una se adquiere una sola vez por partida (ninguna
+// acumula), por eso la tienda nunca repite una mejora ya conseguida.
+enum TipoMejora {
+    M_NUCLEO, M_REFLEJOS, M_GOLPE_FUERTE, M_ALCANCE, M_FIREWALL,
+    M_EMPUJE, M_ATURDIR, M_MEDICO, M_ESCUDO, M_TOTAL
+};
+
+struct MejoraDef {
+    const char* nombre;
+    const char* descripcion;
+};
+
+inline const MejoraDef& definicionMejora(int t) {
+    static const MejoraDef defs[M_TOTAL] = {
+        { "Nucleo Reforzado",     "+1 de vida maxima (y cura 1 punto)" },
+        { "Reflejos Rapidos",     "El ataque espera 2 cuadros menos" },
+        { "Golpe Pesado",         "La espada hace 2 de dano por golpe" },
+        { "Alcance Extendido",    "+1 celda de alcance con la espada" },
+        { "Firewall Reforzado",   "Invulnerabilidad 30 -> 40 cuadros" },
+        { "Empuje Potente",       "El empuje de enemigos 4 -> 6 celdas" },
+        { "Protocolo Aturdidor",  "Aturdimiento de enemigos 35 -> 45" },
+        { "Datos Medicos",        "Los corazones curan 2 en vez de 1" },
+        { "Escudo de Emergencia", "Bloquea un golpe; recarga cada 300 cuadros" },
+    };
+    return defs[t];
+}
+
+// TiendaMejoras: ofrece 3 mejoras al azar entre las que el jugador todavia no
+// tiene, aplica la elegida a EfectosMejoras y no permite una segunda eleccion en
+// la misma visita.
+class TiendaMejoras {
+public:
+    void reiniciar();
+    bool abrir();                       // false si ya no quedan mejoras por comprar
+    void cerrar() { abierta = false; }
+    bool activa() const { return abierta; }
+    int numOfertas() const { return (int)ofertas.size(); }
+    int oferta(int i) const { return ofertas[i]; }
+    bool elegir(int i, EfectosMejoras& fx);
+    static void aplicarMejora(int tipo, EfectosMejoras& fx);
+private:
+    bool abierta = false;
+    bool adquiridas[M_TOTAL] = {};
+    std::vector<int> ofertas;
+};
+
 //ENTITY SYSTEM
 // Entidades: arreglos contiguos de tamano fijo (maximo MAX_ENT) con la posicion,
 // velocidad, posicion anterior, vida, estado, etc. de cada entidad. Se usa para
@@ -203,11 +286,16 @@ struct Entidades {
     int32_t aturdido[MAX_ENT] = {};
     int32_t desvio[MAX_ENT] = {};
     int32_t desvioVel[2 * MAX_ENT] = {};
+    int32_t bombaEspera[MAX_ENT] = {};   // solo la usa el jefe
     uint32_t n = 0;
 
     bool agregar(int t, int v, int32_t x, int32_t y, int32_t vx, int32_t vy);
     void eliminar(uint32_t i);
-    Rect rect(uint32_t i) const { return Rect{ aCelda(pos[2 * i]), aCelda(pos[2 * i + 1]), 1, 1 }; }
+    // El jefe ocupa 2x2 celdas; el resto de las entidades ocupa 1x1.
+    Rect rect(uint32_t i) const {
+        int lado = (tipo[i] == JEFE) ? 2 : 1;
+        return Rect{ aCelda(pos[2 * i]), aCelda(pos[2 * i + 1]), lado, lado };
+    }
 };
 
 // Jugador: posicion, vida, invulnerabilidad, y la zona de golpe de su ataque.
@@ -215,13 +303,18 @@ class Jugador {
 public:
     int32_t pos[2], vel[2], prev[2];
     int vida;
+    int vidaMax;
     int inmune;
+    int inmuneCuadros;
     int espera;
+    int esperaGolpe;
     int golpe;
+    int alcanceExtra;
     Dir mira;
     Dir dirGolpe;
 
     void reiniciar(int cx, int cy);
+    void aplicarMejoras(const EfectosMejoras& fx);
     void leerComandos(const std::vector<Comando>& cmds);
     void actualizar();
     bool recibirDano();
@@ -242,7 +335,7 @@ namespace Enemigos {
     bool agregar(Entidades& e, int tipo, int vida, int32_t x, int32_t y);
     void actualizar(Entidades& e, const int32_t* posJugador, const FnDisparo& disparar);
     void mover(Entidades& e);
-    bool recibirDano(Entidades& e, uint32_t i);
+    bool recibirDano(Entidades& e, uint32_t i, int dano = 1);
     void aturdir(Entidades& e, uint32_t i, int cuadros);
 }
 
@@ -250,6 +343,17 @@ namespace Enemigos {
 namespace Proyectiles {
     void crear(Entidades& p, int32_t x, int32_t y, int32_t vx, int32_t vy);
     void mover(Entidades& p);
+}
+
+// FnBomba: el Game Engine la entrega al jefe para colocar una bomba en una celda
+// libre. La posicion la elige el motor, que conoce la arena y al jugador.
+typedef std::function<void()> FnBomba;
+
+// Jefe: IA propia del jefe final. Vive en el mismo arreglo de Entidades que los
+// demas enemigos para reutilizar movimiento, colisiones, dano y dibujo.
+namespace Jefe {
+    bool agregar(Entidades& e, int32_t x, int32_t y);
+    void actualizar(Entidades& e, const int32_t* jugador, const FnDisparo& disparar, const FnBomba& bomba);
 }
 
 // WAVE MANAGER 
@@ -311,7 +415,7 @@ struct Sprite {
 class ASCIISpriteMgr {
 public:
     void cargar();
-    Sprite jugador, soldado, arquero, mago;
+    Sprite jugador, soldado, arquero, mago, jefe;
     Sprite protH, protV, protM;
     Sprite golpe, marca, corazon;
     static bool visible(int parpadeo) { return parpadeo % 2 == 0; }
@@ -320,11 +424,18 @@ public:
 // DatosHUD: datos que el HUD solo LEE para mostrar (vida, oleada, enemigos, puntos, mapa).
 struct DatosHUD {
     int vida;
+    int vidaMax;
     int oleada;
     int enemigos;
     int puntaje;
     const char* mapa;
     bool esperando;
+    bool escudo;
+    bool escudoListo;
+    int escudoTimer;
+    bool jefe;
+    int jefeVida;
+    int jefeVidaMax;
 };
 
 // Renderer: dibuja todo primero en un buffer de caracteres (no en la pantalla) por
@@ -336,15 +447,25 @@ public:
     void limpiar();
     void pintarArena(const Arena& arena);
     void pintarEntidades(const Arena& arena, const Jugador& j, const Entidades& enemigos, const Entidades& proy, const Entidades& corazones);
+    void pintarBombas(const Entidades& bombas);
     void pintarSprite(const Sprite& s, int cx, int cy, int color);
+    void limpiarZona(int x, int y, int ancho, int alto);
     void texto(int x, int y, const std::string& s, int color);
     void textoCentrado(int y, const std::string& s, int color);
+    // Version UTF-8: guarda un caracter (1 a 4 bytes) por celda del buffer.
+    void textoUTF8(int x, int y, const std::string& s, int color);
+    void textoUTF8Centrado(int y, const std::string& s, int color);
+    static int anchoUTF8(const std::string& s);
+    // Marca una zona para que se dibuje en video inverso (opcion seleccionada).
+    void resaltar(int x, int y, int ancho);
     void refrescar();
     bool terminalSuficiente() const;
 private:
     ASCIISpriteMgr sprites;
     char buf[PANT_H][PANT_W];
     unsigned char col[PANT_H][PANT_W];
+    std::string u8[PANT_H][PANT_W];
+    bool inv[PANT_H][PANT_W];
     bool hayColor = false;
     bool pantalla = true;
 };
@@ -353,9 +474,14 @@ private:
 class HUDManager {
 public:
     static void dibujar(Renderer& r, const DatosHUD& d);
-    static void menu(Renderer& r);
+    static void boot(Renderer& r, int cuadro);
+    static void menu(Renderer& r, const std::vector<std::string>& titulo, int seleccion);
+    static void opciones(Renderer& r, int seleccion, int volumen);
+    static void creditos(Renderer& r);
+    static void victoria(Renderer& r, int puntaje);
     static void pausa(Renderer& r);
     static void derrota(Renderer& r, const DatosHUD& d);
+    static void tienda(Renderer& r, const TiendaMejoras& t, int rondas, int siguienteOleada);
 };
 
 // GAME ENGINE
@@ -367,6 +493,8 @@ public:
     const uint8_t* comparar(const Rect* a, uint32_t na, const Rect* b, uint32_t nb);
 
     static void frenarContraPared(const Arena& arena, int32_t* pos, const int32_t* prev);
+    // Igual, pero para el cuerpo completo 2x2 del jefe.
+    static void frenarContraPared2x2(const Arena& arena, int32_t* pos, const int32_t* prev);
 
     static void desplazarSinPared(const Arena& arena, int32_t* pos, int32_t* prev, int32_t dx, int32_t dy);
 
@@ -387,22 +515,34 @@ struct BenchCuadro {
 
 void reporteBench(const BenchCuadro& b);
 
-// Estados de la partida: menu, jugando, pausa y fin de partida.
-enum EstadoPartida { E_MENU, E_JUGANDO, E_PAUSA, E_FIN };
+// Estados de la partida: arranque, menu, submenus, jugando, pausa, tienda y fin.
+enum EstadoPartida { E_BOOT, E_MENU, E_OPCIONES, E_CREDITOS, E_JUGANDO, E_PAUSA, E_TIENDA, E_FIN, E_VICTORIA };
 
 extern volatile std::sig_atomic_t senalSalir;
 void instalarSenales();
 
-// StateManager: maquina de estados. Menu -Enter-> jugando <-P-> pausa; vida 0 -> fin
-// de partida -Enter-> menu; Q sale desde cualquier estado. Solo en 'jugando' corre la logica.
+// StateManager: maquina de estados. Boot -> menu; menu -Enter-> jugando/opciones/
+// creditos/salida; vida 0 -> fin de partida -Enter-> menu. Q sale desde el juego,
+// pero en los submenus Q/Esc vuelven al menu. Solo en 'jugando' corre la logica.
 class StateManager {
 public:
     EstadoPartida actual() const { return estado; }
     void procesar(const Comando& c, bool& iniciarPartida, bool& salir);
     void derrota() { estado = E_FIN; }
+    void victoria() { estado = E_VICTORIA; }
     void forzarJugando() { estado = E_JUGANDO; }
+    void terminarBoot() { estado = E_MENU; }
+    int seleccionMenu() const { return selMenu; }
+    int seleccionOpciones() const { return selOpc; }
+    int volumen() const { return vol; }
+    // La tienda congela la partida: mientras el estado sea E_TIENDA no corre logica().
+    void abrirTienda() { estado = E_TIENDA; }
+    void cerrarTienda() { estado = E_JUGANDO; }
 private:
-    EstadoPartida estado = E_MENU;
+    EstadoPartida estado = E_BOOT;
+    int selMenu = 0;
+    int selOpc = 0;
+    int vol = 60;              // 0..100, se conserva durante toda la sesion
 };
 
 // GameEngine: director del juego. Es el unico que conecta los modulos entre si:
@@ -426,11 +566,20 @@ private:
     Entidades enemigos;
     Entidades proyectiles;
     Entidades corazones;
+    EfectosMejoras efectos;
+    TiendaMejoras tienda;
+    int rondasCompletadas = 0;
     int puntaje = 0;
     bool esperando = true;
     int pausaOleada = 0;
     bool salir = false;
+    int bootFrame = 0;
+    std::vector<std::string> titulo;
+    Entidades bombas;
+    bool jefeActivo = false;
+    bool jefeDerrotado = false;
 
+    void cargarTitulo();
     void cargarMapa(int i);
     void siguienteMapa();
     void empujarEnemigo(uint32_t j);
@@ -444,6 +593,13 @@ private:
     void soltarCorazon(int32_t x, int32_t y);
     void recogerCorazones();
     void pedirOleada();
+    void procesarTienda(const std::vector<Comando>& cmds);
+    void iniciarJefe();
+    void terminarJefe();
+    void colocarBomba();
+    void actualizarBombas();
+    void actualizarEscudo();
+    bool escudoAbsorbe();
     void pintar();
     void dibujar();
     void controlarTiempo(const timespec& inicio);
@@ -522,6 +678,15 @@ void Arena::generarPorDefecto() {
     bloque(26, 13, 33, 13);
     bloque(20, 8, 20, 11);
     bloque(39, 8, 39, 11);
+}
+
+// Arena del jefe: solo el borde rectangular, sin ningun obstaculo interior.
+void Arena::generarSoloBordes() {
+    memset(celdas, ' ', sizeof(celdas));
+    bloque(0, 0, ARENA_W - 1, 0);
+    bloque(0, ARENA_H - 1, ARENA_W - 1, ARENA_H - 1);
+    bloque(0, 0, 0, ARENA_H - 1);
+    bloque(ARENA_W - 1, 0, ARENA_W - 1, ARENA_H - 1);
 }
 
 // Carga una arena desde un archivo de texto de 20 filas: '#' es pared y cualquier
@@ -633,6 +798,9 @@ bool ActionMapper::traducir(int tecla, Comando& cmd) const {
     case 'p': case 'P': cmd = Comando{ PAUSA, ARRIBA }; return true;
     case 'q': case 'Q': case TECLA_ESC: cmd = Comando{ SALIR, ARRIBA }; return true;
     case '\n': case '\r': case KEY_ENTER: cmd = Comando{ ENTER, ARRIBA }; return true;
+    case '1': cmd = Comando{ ELEGIR1, ARRIBA }; return true;
+    case '2': cmd = Comando{ ELEGIR2, ARRIBA }; return true;
+    case '3': cmd = Comando{ ELEGIR3, ARRIBA }; return true;
     default: return false;
     }
 }
@@ -672,6 +840,7 @@ bool Entidades::agregar(int t, int v, int32_t x, int32_t y, int32_t vx, int32_t 
     aturdido[i] = 0;
     desvio[i] = 0;
     desvioVel[2 * i] = desvioVel[2 * i + 1] = 0;
+    bombaEspera[i] = 0;
     return true;
 }
 
@@ -695,6 +864,7 @@ void Entidades::eliminar(uint32_t i) {
         desvio[i] = desvio[u];
         desvioVel[2 * i] = desvioVel[2 * u];
         desvioVel[2 * i + 1] = desvioVel[2 * u + 1];
+        bombaEspera[i] = bombaEspera[u];
     }
     n--;
 }
@@ -705,11 +875,26 @@ void Jugador::reiniciar(int cx, int cy) {
     pos[1] = prev[1] = aFijo(cy);
     vel[0] = vel[1] = 0;
     vida = VIDA_JUGADOR;
+    vidaMax = VIDA_JUGADOR;
+    inmuneCuadros = INMUNE_JUGADOR;
+    esperaGolpe = GOLPE_ESPERA;
+    alcanceExtra = 0;
     inmune = espera = golpe = 0;
     mira = ABAJO;
     dirGolpe = ABAJO;
     quiereX = quiereY = mantenerX = mantenerY = 0;
     quiereAtacar = false;
+}
+
+// Copia al jugador los valores que modifican las mejoras. Si el nucleo reforzado
+// subio la vida maxima, el punto extra tambien se cura en el momento.
+void Jugador::aplicarMejoras(const EfectosMejoras& fx) {
+    if (fx.vidaMax > vidaMax) vida += fx.vidaMax - vidaMax;
+    vidaMax = fx.vidaMax;
+    if (vida > vidaMax) vida = vidaMax;
+    esperaGolpe = fx.esperaGolpe;
+    inmuneCuadros = fx.inmuneCuadros;
+    alcanceExtra = fx.alcanceExtra;
 }
 
 // Guarda lo que el jugador quiere hacer este cuadro (direccion de movimiento y/o ataque)
@@ -763,7 +948,7 @@ void Jugador::actualizar() {
     if (quiereAtacar && espera == 0) {
         golpe = GOLPE_DURACION;
         dirGolpe = mira;
-        espera = GOLPE_ESPERA;
+        espera = esperaGolpe;
     }
     quiereAtacar = false;
 }
@@ -772,20 +957,22 @@ void Jugador::actualizar() {
 bool Jugador::recibirDano() {
     if (inmune > 0) return false;
     vida--;
-    inmune = INMUNE_JUGADOR;
+    inmune = inmuneCuadros;
     return vida <= 0;
 }
 
 Rect Jugador::rect() const { return Rect{ aCelda(pos[0]), aCelda(pos[1]), 1, 1 }; }
 
-// Zona de golpe: 3 celdas de ancho por 3 de profundidad delante del jugador segun hacia donde miro al atacar
+// Zona de golpe: 3 celdas de ancho por 3 de profundidad delante del jugador segun hacia donde miro al atacar.
+// La mejora de alcance estira la zona hacia adelante (alcanceExtra celdas).
 Rect Jugador::zonaGolpe() const {
     int cx = aCelda(pos[0]), cy = aCelda(pos[1]);
+    int r = alcanceExtra;
     switch (dirGolpe) {
-    case ARRIBA: return Rect{ cx - 1, cy - 3, 3, 3 };
-    case ABAJO: return Rect{ cx - 1, cy + 1, 3, 3 };
-    case IZQUIERDA: return Rect{ cx - 3, cy - 1, 3, 3 };
-    default: return Rect{ cx + 1, cy - 1, 3, 3 };
+    case ARRIBA: return Rect{ cx - 1, cy - 3 - r, 3, 3 + r };
+    case ABAJO: return Rect{ cx - 1, cy + 1, 3, 3 + r };
+    case IZQUIERDA: return Rect{ cx - 3 - r, cy - 1, 3 + r, 3 };
+    default: return Rect{ cx + 1, cy - 1, 3 + r, 3 };
     }
 }
 
@@ -825,6 +1012,8 @@ void Enemigos::actualizar(Entidades& e, const int32_t* jug, const FnDisparo& dis
             v[0] = v[1] = 0;
             continue;
         }
+        // El jefe tiene su propia IA en Jefe::actualizar().
+        if (e.tipo[i] == JEFE) continue;
         
         int32_t ovx = v[0], ovy = v[1];
         bool trabado = (ovx != 0 || ovy != 0) && p[0] == e.prev[2 * i] && p[1] == e.prev[2 * i + 1];
@@ -919,9 +1108,10 @@ void Enemigos::mover(Entidades& e) {
 }
 
 // Resta vida, activa parpadeo e inmunidad corta. Devuelve true si la vida llego a 0 (se elimina al final del cuadro).
-bool Enemigos::recibirDano(Entidades& e, uint32_t i) {
+// 'dano' viene de la mejora Golpe Pesado (1 por defecto).
+bool Enemigos::recibirDano(Entidades& e, uint32_t i, int dano) {
     if (e.inmune[i] > 0 || e.vida[i] <= 0) return false;
-    e.vida[i]--;
+    e.vida[i] -= dano;
     e.parpadeo[i] = PARPADEO_CUADROS;
     e.inmune[i] = INMUNE_ENEMIGO;
     e.estado[i] = HERIDO;
@@ -943,6 +1133,146 @@ void Proyectiles::crear(Entidades& p, int32_t x, int32_t y, int32_t vx, int32_t 
 void Proyectiles::mover(Entidades& p) {
     memcpy(p.prev, p.pos, sizeof(int32_t) * 2 * p.n);
     mover_entidades(p.pos, p.vel, 2 * p.n);
+}
+
+// Jefe
+// Crea al jefe con vida alta y sus temporizadores iniciales. El Game Engine lo
+// coloca en el arreglo de enemigos para reutilizar colisiones y dano.
+bool Jefe::agregar(Entidades& e, int32_t x, int32_t y) {
+    if (!e.agregar(JEFE, VIDA_JEFE, x, y, 0, 0)) return false;
+    uint32_t i = e.n - 1;
+    e.espera[i] = 60;              // margen antes de la primera lluvia
+    e.bombaEspera[i] = 150;        // primera bomba un poco despues
+    return true;
+}
+
+// Dispara una flecha hacia un punto; se usa la misma normalizacion entera que el
+// mago para no depender de punto flotante.
+static void dispararHacia(const FnDisparo& disparar, int32_t ox, int32_t oy, int32_t tx, int32_t ty) {
+    int64_t dx = (int64_t)tx - ox, dy = (int64_t)ty - oy;
+    int64_t m = std::max<int64_t>(std::abs(dx), 2 * std::abs(dy));
+    if (m == 0) return;
+    int32_t vx = (int32_t)(dx * VEL_PROY_X / m);
+    int32_t vy = (int32_t)(dy * VEL_PROY_X / m);
+    disparar(ox, oy, vx, vy);
+}
+
+// IA del jefe: mantiene la distancia, se desplaza lateralmente y alterna entre
+// lluvias de flechas dirigidas y bombas con aviso. Los temporizadores se reducen
+// en Enemigos::actualizar() antes de llegar aqui.
+void Jefe::actualizar(Entidades& e, const int32_t* jug, const FnDisparo& disparar, const FnBomba& bomba) {
+    for (uint32_t i = 0; i < e.n; i++) {
+        if (e.tipo[i] != JEFE) continue;
+        int32_t* p = &e.pos[2 * i];
+        int32_t* v = &e.vel[2 * i];
+        if (e.parpadeo[i] > 0 || e.aturdido[i] > 0) {
+            v[0] = v[1] = 0;
+            continue;
+        }
+
+        if (e.bombaEspera[i] > 0) e.bombaEspera[i]--;
+
+        int32_t dx = jug[0] - p[0], dy = jug[1] - p[1];
+        int adx = std::abs(dx) >> FP_BITS, ady = std::abs(dy) >> FP_BITS;
+        int dist = std::max(adx, 2 * ady);
+        bool horiz = std::abs(dx) >= std::abs(dy);
+
+        // Mantiene una distancia de combate: se acerca si esta lejos, retrocede
+        // si el jugador se le encima y strafea cuando esta en rango.
+        if (dist > 16) {
+            v[0] = signo(dx) * VEL_JEFE_X;
+            v[1] = signo(dy) * VEL_JEFE_Y;
+        }
+        else if (dist < 9) {
+            v[0] = -signo(dx) * VEL_JEFE_X;
+            v[1] = -signo(dy) * VEL_JEFE_Y;
+        }
+        else {
+            int s = ((e.espera[i] / 20) % 2 == 0) ? 1 : -1;
+            if (horiz) { v[0] = 0; v[1] = s * VEL_JEFE_Y; }
+            else { v[0] = s * VEL_JEFE_X; v[1] = 0; }
+        }
+
+        if (e.espera[i] == 0) {
+            // Lluvia de 3 flechas apuntadas al jugador, con dispersion perpendicular.
+            const int offs[JEFE_FLECHAS] = { -2, 0, 2 };
+            int32_t ox = p[0] + aFijo(1), oy = p[1] + aFijo(1);
+            for (int k = 0; k < JEFE_FLECHAS; k++) {
+                int32_t tx = jug[0], ty = jug[1];
+                if (horiz) ty += offs[k] * aFijo(1);
+                else tx += offs[k] * aFijo(1);
+                dispararHacia(disparar, ox, oy, tx, ty);
+            }
+            e.espera[i] = JEFE_ESPERA_DISPARO;
+        }
+
+        if (e.bombaEspera[i] == 0) {
+            bomba();
+            e.bombaEspera[i] = JEFE_ESPERA_BOMBA;
+        }
+    }
+}
+
+// Tienda de mejoras 
+// Empieza una partida nueva sin mejoras compradas ni ofertas pendientes.
+void TiendaMejoras::reiniciar() {
+    abierta = false;
+    ofertas.clear();
+    for (int i = 0; i < M_TOTAL; i++) adquiridas[i] = false;
+}
+
+// Arma la oferta de la visita: hasta 3 mejoras al azar entre las no adquiridas.
+// Devuelve false (y no abre) si ya se compraron todas.
+bool TiendaMejoras::abrir() {
+    ofertas.clear();
+    int libres[M_TOTAL];
+    int n = 0;
+    for (int i = 0; i < M_TOTAL; i++)
+        if (!adquiridas[i]) libres[n++] = i;
+    if (n == 0) {
+        abierta = false;
+        return false;
+    }
+    for (int i = 0; i < n; i++) {
+        int j = i + std::rand() % (n - i);
+        std::swap(libres[i], libres[j]);
+    }
+    int k = std::min(3, n);
+    for (int i = 0; i < k; i++) ofertas.push_back(libres[i]);
+    abierta = true;
+    return true;
+}
+
+// Aplica solo la primera eleccion valida de la visita: despues cierra la tienda,
+// asi una misma tecla no puede comprar dos mejoras.
+bool TiendaMejoras::elegir(int i, EfectosMejoras& fx) {
+    if (!abierta || i < 0 || i >= (int)ofertas.size()) return false;
+    int t = ofertas[i];
+    if (adquiridas[t]) return false;
+    adquiridas[t] = true;
+    aplicarMejora(t, fx);
+    abierta = false;
+    return true;
+}
+
+// Efecto de cada mejora: siempre valores enteros y sin acumulacion entre partidas.
+void TiendaMejoras::aplicarMejora(int tipo, EfectosMejoras& fx) {
+    switch (tipo) {
+    case M_NUCLEO:       fx.vidaMax++; break;
+    case M_REFLEJOS:     fx.esperaGolpe = std::max(4, fx.esperaGolpe - 2); break;
+    case M_GOLPE_FUERTE: fx.danoEspada++; break;
+    case M_ALCANCE:      fx.alcanceExtra++; break;
+    case M_FIREWALL:     fx.inmuneCuadros = 40; break;
+    case M_EMPUJE:       fx.empujeCeldas = 6; break;
+    case M_ATURDIR:      fx.aturdirCuadros = 45; break;
+    case M_MEDICO:       fx.curacionCorazon = 2; break;
+    case M_ESCUDO:
+        fx.escudo = true;
+        fx.escudoListo = true;
+        fx.escudoTimer = 0;
+        break;
+    default: break;
+    }
 }
 
 // Wave Manager 
@@ -1014,6 +1344,7 @@ void ASCIISpriteMgr::cargar() {
     soldado = Sprite{ "S", 1, 1 };
     arquero = Sprite{ "A", 1, 1 };
     mago = Sprite{ "M", 1, 1 };
+    jefe = Sprite{ "BBBB", 2, 2 };
     protH = Sprite{ "-", 1, 1 };
     protV = Sprite{ "|", 1, 1 };
     protM = Sprite{ "*", 1, 1 };
@@ -1044,6 +1375,10 @@ void Renderer::iniciar(bool conPantalla) {
 void Renderer::limpiar() {
     memset(buf, ' ', sizeof(buf));
     memset(col, C_BLANCO, sizeof(col));
+    memset(inv, false, sizeof(inv));
+    for (int y = 0; y < PANT_H; y++)
+        for (int x = 0; x < PANT_W; x++)
+            u8[y][x].clear();
 }
 
 // Capa 1: paredes de la arena.
@@ -1108,7 +1443,8 @@ void Renderer::pintarEntidades(const Arena& arena, const Jugador& j, const Entid
     for (uint32_t i = 0; i < enemigos.n; i++) {
         if (!ASCIISpriteMgr::visible(enemigos.parpadeo[i])) continue;
         int cx = aCelda(enemigos.pos[2 * i]), cy = aCelda(enemigos.pos[2 * i + 1]);
-        if (enemigos.tipo[i] == SOLDADO) pintarSprite(sprites.soldado, cx, cy, C_ROJO);
+        if (enemigos.tipo[i] == JEFE) pintarSprite(sprites.jefe, cx, cy, C_MAGENTA);
+        else if (enemigos.tipo[i] == SOLDADO) pintarSprite(sprites.soldado, cx, cy, C_ROJO);
         else if (enemigos.tipo[i] == ARQUERO) pintarSprite(sprites.arquero, cx, cy, C_AMARILLO);
         else pintarSprite(sprites.mago, cx, cy, C_MAGENTA);
     }
@@ -1124,6 +1460,51 @@ void Renderer::pintarEntidades(const Arena& arena, const Jugador& j, const Entid
         pintarSprite(sprites.jugador, jx, jy, C_VERDE);
 }
 
+// Capa de bombas: 'o'/'O' parpadea durante el aviso y una X amarilla marca el
+// radio de la explosion. Se dibuja despues de las entidades para que se distinga.
+void Renderer::pintarBombas(const Entidades& bombas) {
+    for (uint32_t i = 0; i < bombas.n; i++) {
+        int cx = aCelda(bombas.pos[2 * i]), cy = aCelda(bombas.pos[2 * i + 1]);
+        if (bombas.estado[i] == 0) {
+            if (bombas.espera[i] > 15 && (bombas.espera[i] / 6) % 2 == 1) continue;
+            int bx = ARENA_X + cx, by = ARENA_Y + cy;
+            if (bx < 0 || by < 0 || bx >= PANT_W || by >= PANT_H) continue;
+            buf[by][bx] = bombas.espera[i] <= 15 ? 'O' : 'o';
+            col[by][bx] = bombas.espera[i] <= 15 ? C_ROJO : C_AMARILLO;
+            inv[by][bx] = false;
+            u8[by][bx].clear();
+        }
+        else {
+            for (int dy = -BOMBA_RADIO; dy <= BOMBA_RADIO; dy++) {
+                for (int dx = -BOMBA_RADIO; dx <= BOMBA_RADIO; dx++) {
+                    int bx = ARENA_X + cx + dx, by = ARENA_Y + cy + dy;
+                    if (bx < 0 || by < 0 || bx >= PANT_W || by >= PANT_H) continue;
+                    buf[by][bx] = ((dx + dy) & 1) ? 'x' : 'X';
+                    col[by][bx] = C_ROJO;
+                    inv[by][bx] = false;
+                    u8[by][bx].clear();
+                }
+            }
+        }
+    }
+}
+
+// Borra una zona del buffer a espacios blancos (fondo de la tienda y de los paneles).
+void Renderer::limpiarZona(int x, int y, int ancho, int alto) {
+    for (int f = 0; f < alto; f++) {
+        int by = y + f;
+        if (by < 0 || by >= PANT_H) continue;
+        for (int c = 0; c < ancho; c++) {
+            int bx = x + c;
+            if (bx < 0 || bx >= PANT_W) continue;
+            buf[by][bx] = ' ';
+            col[by][bx] = C_BLANCO;
+            inv[by][bx] = false;
+            u8[by][bx].clear();
+        }
+    }
+}
+
 // Escribe texto en el buffer en (x, y), recortando lo que se salga de la pantalla.
 void Renderer::texto(int x, int y, const std::string& s, int color) {
     if (y < 0 || y >= PANT_H) return;
@@ -1132,12 +1513,56 @@ void Renderer::texto(int x, int y, const std::string& s, int color) {
         if (cx < 0 || cx >= PANT_W) continue;
         buf[y][cx] = s[i];
         col[y][cx] = (unsigned char)color;
+        inv[y][cx] = false;
+        u8[y][cx].clear();
     }
 }
 
 // Igual que texto(), centrado horizontalmente.
 void Renderer::textoCentrado(int y, const std::string& s, int color) {
     texto((PANT_W - (int)s.size()) / 2, y, s, color);
+}
+
+// Cantidad de caracteres (no de bytes) de una cadena UTF-8.
+int Renderer::anchoUTF8(const std::string& s) {
+    int n = 0;
+    for (size_t i = 0; i < s.size(); i++)
+        if (((unsigned char)s[i] & 0xC0) != 0x80) n++;
+    return n;
+}
+
+// Escribe una cadena UTF-8 guardando cada caracter completo en una celda, para que
+// los caracteres de bloque del titulo no se partan byte por byte.
+void Renderer::textoUTF8(int x, int y, const std::string& s, int color) {
+    if (y < 0 || y >= PANT_H) return;
+    int cx = x;
+    for (size_t i = 0; i < s.size();) {
+        unsigned char c = (unsigned char)s[i];
+        int bytes = 1;
+        if ((c & 0xE0) == 0xC0) bytes = 2;
+        else if ((c & 0xF0) == 0xE0) bytes = 3;
+        else if ((c & 0xF8) == 0xF0) bytes = 4;
+        if (i + (size_t)bytes > s.size()) bytes = 1;
+        if (cx >= 0 && cx < PANT_W) {
+            buf[y][cx] = ' ';
+            col[y][cx] = (unsigned char)color;
+            inv[y][cx] = false;
+            u8[y][cx] = s.substr(i, bytes);
+        }
+        i += bytes;
+        cx++;
+    }
+}
+
+void Renderer::textoUTF8Centrado(int y, const std::string& s, int color) {
+    textoUTF8((PANT_W - anchoUTF8(s)) / 2, y, s, color);
+}
+
+// Marca una zona para dibujarla en video inverso (A_REVERSE).
+void Renderer::resaltar(int x, int y, int ancho) {
+    if (y < 0 || y >= PANT_H) return;
+    for (int c = x; c < x + ancho; c++)
+        if (c >= 0 && c < PANT_W) inv[y][c] = true;
 }
 
 // La terminal debe ser de al menos 80x24.
@@ -1155,9 +1580,12 @@ void Renderer::refrescar() {
     for (int y = 0; y < PANT_H; y++) {
         for (int x = 0; x < PANT_W; x++) {
             int c = col[y][x];
-            if (hayColor) attrset(COLOR_PAIR(c) | (c == C_AZUL ? A_NORMAL : A_BOLD));
-            else attrset(A_NORMAL);
-            mvaddch(y, x, (chtype)(unsigned char)buf[y][x]);
+            attr_t attr = inv[y][x] ? A_REVERSE : 0;
+            if (hayColor) attr |= COLOR_PAIR(c) | (c == C_AZUL ? A_NORMAL : A_BOLD);
+            else attr |= A_NORMAL;
+            attrset(attr);
+            if (!u8[y][x].empty()) mvaddstr(y, x, u8[y][x].c_str());
+            else mvaddch(y, x, (chtype)(unsigned char)buf[y][x]);
         }
     }
     refresh();
@@ -1167,33 +1595,148 @@ void Renderer::refrescar() {
 void HUDManager::dibujar(Renderer& r, const DatosHUD& d) {
     // Barra de vida de ancho fijo: cada golpe apaga un '#' y el ']' no se mueve.
     std::string v = "VIDA [";
-    for (int i = 0; i < VIDA_JUGADOR; i++) v += (i < d.vida ? '#' : ' ');
+    for (int i = 0; i < d.vidaMax; i++) v += (i < d.vida ? '#' : ' ');
     v += ']';
     r.texto(1, 0, v, C_ROJO);
     std::string o = "OLEADA " + std::to_string(d.oleada) + "   ENEMIGOS " + std::to_string(d.enemigos) +
         "   PUNTOS " + std::to_string(d.puntaje);
     r.texto(PANT_W - (int)o.size() - 1, 0, o, C_AMARILLO);
     r.texto(1, 1, std::string("Mapa: ") + d.mapa, C_CIAN);
+    if (d.jefe) {
+        const int SEG = 20;
+        int llenos = d.jefeVidaMax > 0 ? (d.jefeVida * SEG + d.jefeVidaMax - 1) / d.jefeVidaMax : 0;
+        if (llenos < 0) llenos = 0;
+        std::string b = "JEFE [";
+        for (int i = 0; i < SEG; i++) b += (i < llenos) ? '#' : '.';
+        b += "]";
+        r.textoCentrado(1, b, C_MAGENTA);
+    }
+    if (d.escudo) {
+        std::string s = d.escudoListo ? "ESCUDO LISTO"
+            : "ESCUDO " + std::to_string((d.escudoTimer + 29) / 30) + "s";
+        r.texto(PANT_W - (int)s.size() - 1, 1, s, d.escudoListo ? C_CIAN : C_BLANCO);
+    }
     if (d.esperando) r.textoCentrado(1, "Preparate... oleada " + std::to_string(d.oleada + 1), C_CIAN);
     r.textoCentrado(PANT_H - 1, "Mover: WASD/flechas   Atacar: ESPACIO   Pausa: P   Salir: Q", C_BLANCO);
 }
 
-// Pantalla de inicio: creditos del grupo, titulo, instrucciones y leyenda de enemigos.
-void HUDManager::menu(Renderer& r) {
-    r.textoCentrado(0, "Andres Rodriguez Orozco - 2026087874", C_CIAN);
-    r.textoCentrado(1, "Sebastian Marin Mora - 2026009715", C_CIAN);
-    r.textoCentrado(2, "Julian Solorzano Hernandez - 2026086615", C_CIAN);
-    r.textoCentrado(3, "Abril Gonzalez Morales - 2024207854", C_CIAN);
-    r.textoCentrado(5, "=== THE LEGEND OF JUNE ===", C_AMARILLO);
-    r.textoCentrado(7, "Sobrevive a oleadas de enemigos cada vez mas grandes", C_BLANCO);
-    r.textoCentrado(10, "Mover: WASD o flechas", C_BLANCO);
-    r.textoCentrado(11, "Atacar: ESPACIO (o J)", C_BLANCO);
-    r.textoCentrado(12, "Pausa: P     Salir: Q", C_BLANCO);
-    r.textoCentrado(14, "S = Soldado   A = Arquero   M = Mago", C_ROJO);
-    r.textoCentrado(15, "Los arqueros y magos disparan: esquiva los proyectiles", C_CIAN);
-    r.textoCentrado(16, "El mapa cambia al azar en cada oleada", C_AMARILLO);
-    r.textoCentrado(17, "A veces los enemigos sueltan corazones <3 : recogelos para curarte", C_ROJO);
-    r.textoCentrado(19, "Presiona ENTER para jugar", C_VERDE);
+// Pantalla de arranque estilo CRT: cinco lineas tecnicas que se completan de a
+// poco con puntos suspensivos y un cursor que parpadea. Tras la ultima linea la
+// pantalla queda limpia unos cuadros antes de pasar al menu.
+void HUDManager::boot(Renderer& r, int cuadro) {
+    static const char* prefijos[5] = {
+        "MEM CHECK",
+        "LOADING KERNEL",
+        "MOUNTING /dev/arena",
+        "INIT RENDER SYSTEM",
+        "STARTING JUNE.EXE"
+    };
+    static const char* finales[5] = { "OK (640K)", "DONE", "OK", "OK", "" };
+    const int FRAMES_LINEA = 16;
+    const int TOTAL = 5 * FRAMES_LINEA;
+
+    // Pausa final en pantalla limpia antes de pasar al menu.
+    if (cuadro >= TOTAL) return;
+
+    r.textoCentrado(3, "JUNE BIOS v1.0  (C) 2026", C_CIAN);
+    r.textoCentrado(4, "----------------------------------------", C_AZUL);
+
+    int ultima = 0;
+    for (int i = 0; i < 5; i++) {
+        int t = cuadro - i * FRAMES_LINEA;
+        if (t < 0) break;
+        ultima = i;
+        int puntos = t / 3;
+        if (puntos > 3) puntos = 3;
+        std::string texto = prefijos[i];
+        for (int p = 0; p < puntos; p++) texto += ".";
+        bool listo = t >= 12;
+        if (listo && finales[i][0]) texto += std::string(" ") + finales[i];
+        int x = (PANT_W - (int)texto.size()) / 2;
+        r.texto(x, 7 + i, texto, C_BLANCO);
+        if (listo && finales[i][0])
+            r.texto(x + (int)std::string(prefijos[i]).size() + 4, 7 + i,
+                finales[i], C_VERDE);
+    }
+
+    // Cursor al final de la ultima linea visible.
+    std::string ultimo = prefijos[ultima];
+    int tUltimo = cuadro - ultima * FRAMES_LINEA;
+    int puntos = tUltimo / 3;
+    if (puntos > 3) puntos = 3;
+    for (int p = 0; p < puntos; p++) ultimo += ".";
+    if (tUltimo >= 12 && finales[ultima][0]) ultimo += std::string(" ") + finales[ultima];
+    if ((cuadro / 8) % 2 == 0)
+        r.texto((PANT_W - (int)ultimo.size()) / 2 + (int)ultimo.size(), 7 + ultima, "_", C_VERDE);
+}
+
+// Menu principal: titulo leido desde el archivo de texto (dibujado tal cual y
+// centrado) y cuatro opciones navegables con flechas. La seleccion va en inverso.
+void HUDManager::menu(Renderer& r, const std::vector<std::string>& titulo, int seleccion) {
+    if (titulo.empty()) {
+        r.textoCentrado(3, "No se pudo cargar ASSETS/TITLE.txt", C_ROJO);
+    }
+    else {
+        int filas = (int)titulo.size();
+        if (filas > 12) filas = 12;
+        for (int i = 0; i < filas; i++)
+            r.textoUTF8Centrado(i, titulo[i], C_BLANCO);
+    }
+
+    static const char* opciones[4] = { "Empezar juego", "Opciones", "Creditos", "Salir" };
+    for (int i = 0; i < 4; i++) {
+        std::string linea = "  " + std::string(opciones[i]) + "  ";
+        int x = (PANT_W - (int)linea.size()) / 2;
+        r.texto(x, 13 + i, linea, C_BLANCO);
+        if (i == seleccion) r.resaltar(x, 13 + i, (int)linea.size());
+    }
+    r.textoCentrado(22, "Flechas: mover   ENTER: elegir   Q: salir", C_CIAN);
+}
+
+// Submenu de opciones: solo control de volumen, con barra de nivel y seleccion
+// resaltada. El nivel se conserva en el StateManager durante toda la sesion.
+void HUDManager::opciones(Renderer& r, int seleccion, int volumen) {
+    r.textoCentrado(4, "OPCIONES", C_AMARILLO);
+    r.textoCentrado(6, "CONTROL DE VOLUMEN", C_CIAN);
+
+    int llenos = volumen / 10;
+    if (llenos < 0) llenos = 0;
+    if (llenos > 10) llenos = 10;
+    std::string barra = "Volumen: [";
+    for (int i = 0; i < 10; i++) barra += (i < llenos) ? "\xE2\x96\x88" : "\xE2\x96\x91";
+    barra += "] " + std::to_string(volumen) + "%";
+    r.textoUTF8Centrado(9, barra, C_VERDE);
+
+    static const char* entradas[2] = { "Subir volumen  [+]    ", "Bajar volumen  [-]    " };
+    for (int i = 0; i < 2; i++) {
+        int x = (PANT_W - (int)std::string(entradas[i]).size()) / 2;
+        r.texto(x, 12 + i, entradas[i], C_BLANCO);
+        if (i == seleccion) r.resaltar(x, 12 + i, (int)std::string(entradas[i]).size());
+    }
+    r.textoCentrado(17, "ENTER: ajustar   ESC o Q: volver al menu", C_CIAN);
+}
+
+// Creditos del equipo con retorno al menu.
+void HUDManager::creditos(Renderer& r) {
+    r.textoCentrado(4, "CREDITOS", C_AMARILLO);
+    r.textoCentrado(6, "THE LEGEND OF JUNE", C_CIAN);
+    r.textoCentrado(8, "Andres Rodriguez Orozco", C_BLANCO);
+    r.textoCentrado(9, "Sebastian Marin Mora", C_BLANCO);
+    r.textoCentrado(10, "Julian Solorzano Hernandez", C_BLANCO);
+    r.textoCentrado(11, "Abril Gonzalez Morales", C_BLANCO);
+    r.textoCentrado(14, "Arquitectura de Computadores - TEC", C_BLANCO);
+    r.textoCentrado(15, "II Semestre 2026", C_BLANCO);
+    r.textoCentrado(19, "ENTER, ESC o Q para volver al menu", C_VERDE);
+}
+
+// Pantalla de victoria tras derrotar al jefe final.
+void HUDManager::victoria(Renderer& r, int puntaje) {
+    r.textoCentrado(7, "  JEFE DERROTADO  ", C_AMARILLO);
+    r.textoCentrado(9, "VICTORIA", C_VERDE);
+    r.textoCentrado(11, "La leyenda de June se ha completado", C_BLANCO);
+    r.textoCentrado(13, "Puntaje final: " + std::to_string(puntaje), C_CIAN);
+    r.textoCentrado(17, "ENTER para volver al menu", C_VERDE);
+    r.textoCentrado(18, "Q para salir", C_BLANCO);
 }
 
 // Aviso de pausa.
@@ -1208,6 +1751,34 @@ void HUDManager::derrota(Renderer& r, const DatosHUD& d) {
     r.textoCentrado(11, " Llegaste a la oleada " + std::to_string(d.oleada) + " ", C_BLANCO);
     r.textoCentrado(12, " Puntos: " + std::to_string(d.puntaje) + " ", C_BLANCO);
     r.textoCentrado(14, " ENTER para volver al menu ", C_VERDE);
+}
+
+// Tienda de mejoras: panel ASCII sobre la arena con las 3 ofertas de la visita.
+// Mismo estilo que el HUD (marco de '+', '-' y '|', titulo amarillo, datos cian).
+void HUDManager::tienda(Renderer& r, const TiendaMejoras& t, int rondas, int siguienteOleada) {
+    const int TW = 56, TH = 15;
+    int x = (PANT_W - TW) / 2, y = 4;
+    r.limpiarZona(x, y, TW, TH);
+    std::string borde = "+" + std::string(TW - 2, '-') + "+";
+    r.texto(x, y, borde, C_AMARILLO);
+    r.texto(x, y + TH - 1, borde, C_AMARILLO);
+    for (int f = 1; f < TH - 1; f++) {
+        r.texto(x, y + f, "|", C_AMARILLO);
+        r.texto(x + TW - 1, y + f, "|", C_AMARILLO);
+    }
+    r.textoCentrado(y + 1, "TIENDA DE MEJORAS", C_AMARILLO);
+    r.textoCentrado(y + 2, "Elige UNA mejora: 1, 2 o 3", C_BLANCO);
+    int fy = y + 4;
+    for (int i = 0; i < t.numOfertas(); i++) {
+        const MejoraDef& m = definicionMejora(t.oferta(i));
+        r.texto(x + 3, fy, "[" + std::to_string(i + 1) + "] " + m.nombre, C_VERDE);
+        r.texto(x + 7, fy + 1, m.descripcion, C_BLANCO);
+        fy += 3;
+    }
+    std::string pie = "Rondas completadas: " + std::to_string(rondas) +
+        "   Proxima oleada: " + std::to_string(siguienteOleada);
+    r.textoCentrado(y + TH - 3, pie, C_CIAN);
+    r.textoCentrado(y + TH - 2, "El juego sigue en pausa hasta que elijas", C_CIAN);
 }
 
 // Collision Detector 
@@ -1229,6 +1800,25 @@ void CollisionDetector::frenarContraPared(const Arena& arena, int32_t* p, const 
     if (!arena.esPared(cx, qy)) {
         p[1] = q[1];
     } else if (!arena.esPared(qx, cy)) {
+        p[0] = q[0];
+    } else {
+        p[0] = q[0];
+        p[1] = q[1];
+    }
+}
+
+// Version 2x2: el jefe solo esta fuera de la pared si sus cuatro celdas lo estan.
+void CollisionDetector::frenarContraPared2x2(const Arena& arena, int32_t* p, const int32_t* q) {
+    int cx = aCelda(p[0]), cy = aCelda(p[1]);
+    int qx = aCelda(q[0]), qy = aCelda(q[1]);
+    auto bloqueado = [&arena](int x, int y) {
+        return arena.esPared(x, y) || arena.esPared(x + 1, y) ||
+               arena.esPared(x, y + 1) || arena.esPared(x + 1, y + 1);
+    };
+    if (!bloqueado(cx, cy)) return;
+    if (!bloqueado(cx, qy)) {
+        p[1] = q[1];
+    } else if (!bloqueado(qx, cy)) {
         p[0] = q[0];
     } else {
         p[0] = q[0];
@@ -1356,15 +1946,40 @@ void instalarSenales() {
 // Aplica un comando a la maquina de estados (ver la descripcion de StateManager).
 void StateManager::procesar(const Comando& c, bool& iniciarPartida, bool& salir) {
     if (c.accion == SALIR) {
+        // En los submenus Q/Esc vuelven al menu; en el resto de estados sale.
+        if (estado == E_OPCIONES || estado == E_CREDITOS) {
+            estado = E_MENU;
+            return;
+        }
         salir = true;
         return;
     }
     switch (estado) {
+        case E_BOOT:
+            break;
         case E_MENU:
-            if (c.accion == ENTER) {
-                estado = E_JUGANDO;
-                iniciarPartida = true;
+            if (c.accion == MOVER && c.dir == ARRIBA) selMenu = (selMenu + 3) % 4;
+            else if (c.accion == MOVER && c.dir == ABAJO) selMenu = (selMenu + 1) % 4;
+            else if (c.accion == ENTER) {
+                if (selMenu == 0) {
+                    estado = E_JUGANDO;
+                    iniciarPartida = true;
+                }
+                else if (selMenu == 1) { selOpc = 0; estado = E_OPCIONES; }
+                else if (selMenu == 2) estado = E_CREDITOS;
+                else salir = true;
             }
+            break;
+        case E_OPCIONES:
+            if (c.accion == MOVER && c.dir == ARRIBA) selOpc = 0;
+            else if (c.accion == MOVER && c.dir == ABAJO) selOpc = 1;
+            else if (c.accion == ENTER) {
+                if (selOpc == 0) vol = std::min(100, vol + 10);
+                else vol = std::max(0, vol - 10);
+            }
+            break;
+        case E_CREDITOS:
+            if (c.accion == ENTER) estado = E_MENU;
             break;
         case E_JUGANDO:
             if (c.accion == PAUSA) estado = E_PAUSA;
@@ -1372,17 +1987,46 @@ void StateManager::procesar(const Comando& c, bool& iniciarPartida, bool& salir)
         case E_PAUSA:
             if (c.accion == PAUSA) estado = E_JUGANDO;
             break;
+        case E_TIENDA:
+            // La tienda la maneja GameEngine::procesarTienda(), no la maquina de estados.
+            break;
         case E_FIN:
+            if (c.accion == ENTER) estado = E_MENU;
+            break;
+        case E_VICTORIA:
             if (c.accion == ENTER) estado = E_MENU;
             break;
     }
 }
 
-// Inicia ncurses, el renderer, la semilla aleatoria y carga el primer mapa.
+// Lee el titulo del menu desde el disco, tal cual. Se aceptan los nombres y
+// ubicaciones usados por el proyecto (ASSETS/TITLE.txt y title.txt).
+void GameEngine::cargarTitulo() {
+    titulo.clear();
+    const char* rutas[] = {
+        "ASSETS/TITLE.txt", "ASSETS/title.txt", "title.txt", "TITLE.txt"
+    };
+    std::ifstream archivo;
+    for (const char* ruta : rutas) {
+        archivo.clear();
+        archivo.open(ruta, std::ios::binary);
+        if (archivo.is_open()) break;
+    }
+    if (!archivo.is_open()) return;
+    std::string linea;
+    while (std::getline(archivo, linea)) {
+        if (!linea.empty() && linea.back() == '\r') linea.pop_back();
+        titulo.push_back(linea);
+    }
+    while (!titulo.empty() && titulo.back().empty()) titulo.pop_back();
+}
+
+// Inicia ncurses, el renderer, la semilla aleatoria y carga el titulo y el primer mapa.
 void GameEngine::inicializar() {
     std::srand((unsigned)std::time(nullptr));
     input.iniciar();
     render.iniciar();
+    cargarTitulo();
     cargarMapa(0);
 }
 
@@ -1425,11 +2069,18 @@ void GameEngine::nuevaPartida(int mapaFijo) {
     enemigos.n = 0;
     proyectiles.n = 0;
     corazones.n = 0;
+    bombas.n = 0;
+    jefeActivo = false;
+    jefeDerrotado = false;
     oleadas.reiniciar();
+    efectos = EfectosMejoras{};          // cada partida empieza sin mejoras
+    tienda.reiniciar();
+    rondasCompletadas = 0;
     puntaje = 0;
     esperando = true;
     pausaOleada = 20;
 }
+
 // Ciclo principal: ejecuta un cuadro y espera lo que falte hasta completar 33 ms.
 int GameEngine::ejecutar() {
     inicializar();
@@ -1444,8 +2095,21 @@ int GameEngine::ejecutar() {
 }
 
 // Un cuadro: procesa comandos y estados corre la logica solo si se esta jugando, y dibuja.
+// En la tienda no corre logica(): enemigos, proyectiles, tiempos y escudo quedan congelados.
 void GameEngine::cuadro() {
     std::vector<Comando> cmds = input.leerComandos();
+    if (estados.actual() == E_BOOT) {
+        // Secuencia de arranque: 5 lineas (16 cuadros cada una) + pausa limpia.
+        bootFrame++;
+        if (bootFrame >= 5 * 16 + 30) estados.terminarBoot();
+        if (!salir) dibujar();
+        return;
+    }
+    if (estados.actual() == E_TIENDA) {
+        procesarTienda(cmds);
+        if (!salir) dibujar();
+        return;
+    }
     bool iniciar = false;
     for (size_t i = 0; i < cmds.size(); i++)
         estados.procesar(cmds[i], iniciar, salir);
@@ -1455,11 +2119,34 @@ void GameEngine::cuadro() {
     dibujar();
 }
 
+// Tienda: solo se acepta 1, 2, 3 (una unica eleccion) y Q/Esc para salir.
+void GameEngine::procesarTienda(const std::vector<Comando>& cmds) {
+    for (size_t i = 0; i < cmds.size(); i++) {
+        const Comando& c = cmds[i];
+        if (c.accion == SALIR) {
+            salir = true;
+            return;
+        }
+        int opcion = -1;
+        if (c.accion == ELEGIR1) opcion = 0;
+        else if (c.accion == ELEGIR2) opcion = 1;
+        else if (c.accion == ELEGIR3) opcion = 2;
+        if (opcion < 0) continue;
+        if (tienda.elegir(opcion, efectos)) {
+            jugador.aplicarMejoras(efectos);
+            tienda.cerrar();
+            estados.cerrarTienda();
+            return;                 // ignora los comandos que quedan en el cuadro
+        }
+    }
+}
+
 // Logica de un cuadro, siempre en este orden: (1) comandos al jugador, (2) actualizar
 // y mover entidades (3) colisiones (4) eliminar muertos y recoger corazones,
 // (5) pedir la siguiente oleada. Si el jugador murio pasa a fin de partida.
 void GameEngine::logica(const std::vector<Comando>& cmds) {
     jugador.leerComandos(cmds);
+    actualizarEscudo();
     actualizarEntidades();
     bool murio = revisarColisiones();
     limpiarMuertos();
@@ -1471,11 +2158,14 @@ void GameEngine::logica(const std::vector<Comando>& cmds) {
 // Jugador movimientos y acciones de los enemigos (con la funcion para crear proyectiles) y movimiento de enemigos y proyectiles.
 void GameEngine::actualizarEntidades() {
     jugador.actualizar();
-    Enemigos::actualizar(enemigos, jugador.pos, [this](int32_t x, int32_t y, int32_t vx, int32_t vy) {
+    auto disparar = [this](int32_t x, int32_t y, int32_t vx, int32_t vy) {
         Proyectiles::crear(proyectiles, x, y, vx, vy);
-        });
+    };
+    Enemigos::actualizar(enemigos, jugador.pos, disparar);
+    Jefe::actualizar(enemigos, jugador.pos, disparar, [this]() { colocarBomba(); });
     Enemigos::mover(enemigos);
     Proyectiles::mover(proyectiles);
+    actualizarBombas();
 }
 
 // Aleja y aturde a un enemigo que acaba de tocar al jugador.
@@ -1488,10 +2178,30 @@ void GameEngine::empujarEnemigo(uint32_t j) {
         dy = 0;
         m = 1;
     }
-    int32_t px = (int32_t)((int64_t)dx * aFijo(EMPUJE_CELDAS) / m);
-    int32_t py = (int32_t)((int64_t)dy * aFijo(EMPUJE_CELDAS) / m);
+    int32_t px = (int32_t)((int64_t)dx * aFijo(efectos.empujeCeldas) / m);
+    int32_t py = (int32_t)((int64_t)dy * aFijo(efectos.empujeCeldas) / m);
     CollisionDetector::desplazarSinPared(arena, &enemigos.pos[2 * j], &enemigos.prev[2 * j], px, py);
-    Enemigos::aturdir(enemigos, j, ATURDIR_CUADROS);
+    Enemigos::aturdir(enemigos, j, efectos.aturdirCuadros);
+}
+
+// Escudo de emergencia: mientras no esta listo, la recarga baja un cuadro por cuadro
+// (solo corre con la logica, asi que la tienda y la pausa la congelan).
+void GameEngine::actualizarEscudo() {
+    if (!efectos.escudo || efectos.escudoListo) return;
+    if (--efectos.escudoTimer <= 0) {
+        efectos.escudoListo = true;
+        efectos.escudoTimer = 0;
+    }
+}
+
+// Si el escudo esta listo, absorbe el golpe entrante, empieza a recargar y deja al
+// jugador con la invulnerabilidad normal para que el mismo enemigo no le pegue otra vez.
+bool GameEngine::escudoAbsorbe() {
+    if (!efectos.escudo || !efectos.escudoListo) return false;
+    efectos.escudoListo = false;
+    efectos.escudoTimer = ESCUDO_RECARGA;
+    jugador.inmune = efectos.inmuneCuadros;
+    return true;
 }
 
 // Paredes (frenan al jugador y a los enemigos, destruyen proyectiles) y tres
@@ -1501,8 +2211,12 @@ void GameEngine::empujarEnemigo(uint32_t j) {
 bool GameEngine::revisarColisiones() {
 
     CollisionDetector::frenarContraPared(arena, jugador.pos, jugador.prev);
-    for (uint32_t i = 0; i < enemigos.n; i++)
-        CollisionDetector::frenarContraPared(arena, &enemigos.pos[2 * i], &enemigos.prev[2 * i]);
+    for (uint32_t i = 0; i < enemigos.n; i++) {
+        if (enemigos.tipo[i] == JEFE)
+            CollisionDetector::frenarContraPared2x2(arena, &enemigos.pos[2 * i], &enemigos.prev[2 * i]);
+        else
+            CollisionDetector::frenarContraPared(arena, &enemigos.pos[2 * i], &enemigos.prev[2 * i]);
+    }
     for (uint32_t i = 0; i < proyectiles.n; i++) {
         if (arena.esPared(aCelda(proyectiles.pos[2 * i]), aCelda(proyectiles.pos[2 * i + 1])))
             proyectiles.vida[i] = 0;
@@ -1521,9 +2235,10 @@ bool GameEngine::revisarColisiones() {
         for (uint32_t j = 0; j < enemigos.n; j++)
             if (res[j] && enemigos.vida[j] > 0) hayContacto = true;
         if (hayContacto && jugador.inmune == 0) {
-            if (jugador.recibirDano()) murio = true;
+            if (!escudoAbsorbe() && jugador.recibirDano()) murio = true;
             for (uint32_t j = 0; j < enemigos.n; j++)
-                if (res[j] && enemigos.vida[j] > 0) empujarEnemigo(j);
+                if (res[j] && enemigos.vida[j] > 0 && enemigos.tipo[j] != JEFE)
+                    empujarEnemigo(j);
             for (uint32_t i = 0; i < enemigos.n; i++) re[i] = enemigos.rect(i);
         }
     }
@@ -1534,17 +2249,28 @@ bool GameEngine::revisarColisiones() {
         for (uint32_t j = 0; j < enemigos.n; j++)
             if (res[j] && arena.lineaLibre(aCelda(jugador.pos[0]), aCelda(jugador.pos[1]),
                 aCelda(enemigos.pos[2 * j]), aCelda(enemigos.pos[2 * j + 1])))
-                Enemigos::recibirDano(enemigos, j);
+                Enemigos::recibirDano(enemigos, j, efectos.danoEspada);
     }
 
     if (proyectiles.n > 0) {
         const uint8_t* res = colisionador.comparar(rp, proyectiles.n, &rj, 1);
         for (uint32_t i = 0; i < proyectiles.n; i++) {
             if (res[i] && proyectiles.vida[i] > 0) {
-                if (jugador.recibirDano()) murio = true;
+                // Mientras el jugador ya es invulnerable el disparo se pierde, pero no gasta el escudo.
+                if (jugador.inmune == 0 && !escudoAbsorbe() && jugador.recibirDano()) murio = true;
                 proyectiles.vida[i] = 0;
             }
         }
+    }
+
+    // Explosiones de bombas: cuadrado de radio BOMBA_RADIO alrededor de la bomba.
+    for (uint32_t i = 0; i < bombas.n; i++) {
+        if (bombas.estado[i] != 1) continue;
+        Rect rb{ aCelda(bombas.pos[2 * i]) - BOMBA_RADIO, aCelda(bombas.pos[2 * i + 1]) - BOMBA_RADIO,
+                 2 * BOMBA_RADIO + 1, 2 * BOMBA_RADIO + 1 };
+        uint8_t toca = 0;
+        colisiones(&rj, 1, &rb, 1, &toca);
+        if (toca && jugador.inmune == 0 && !escudoAbsorbe() && jugador.recibirDano()) murio = true;
     }
     return murio;
 }
@@ -1553,9 +2279,14 @@ bool GameEngine::revisarColisiones() {
 void GameEngine::limpiarMuertos() {
     for (uint32_t i = 0; i < enemigos.n;) {
         if (enemigos.vida[i] <= 0) {
-            puntaje += 10;
-            if (std::rand() % 100 < PROB_CORAZON)
-                soltarCorazon(enemigos.pos[2 * i], enemigos.pos[2 * i + 1]);
+            if (enemigos.tipo[i] == JEFE) {
+                puntaje += 1000;           // el jefe no suelta corazones
+            }
+            else {
+                puntaje += 10;
+                if (std::rand() % 100 < PROB_CORAZON)
+                    soltarCorazon(enemigos.pos[2 * i], enemigos.pos[2 * i + 1]);
+            }
             enemigos.eliminar(i);
         }
         else {
@@ -1583,13 +2314,14 @@ void GameEngine::recogerCorazones() {
     for (uint32_t i = 0; i < corazones.n;) {
         if (corazones.espera[i] > 0) corazones.espera[i]--;
         bool tomado = false;
-        if (corazones.espera[i] > 0 && jugador.vida < VIDA_JUGADOR) {
+        if (corazones.espera[i] > 0 && jugador.vida < jugador.vidaMax) {
             Rect rc{ aCelda(corazones.pos[2 * i]), aCelda(corazones.pos[2 * i + 1]), 2, 1 };
             Rect rj = jugador.rect();
             uint8_t toca = 0;
             colisiones(&rj, 1, &rc, 1, &toca);     // misma rutina de colisiones del juego
             if (toca) {
-                jugador.vida++;
+                jugador.vida += efectos.curacionCorazon;
+                if (jugador.vida > jugador.vidaMax) jugador.vida = jugador.vidaMax;
                 tomado = true;
             }
         }
@@ -1599,14 +2331,28 @@ void GameEngine::recogerCorazones() {
 }
 
 // Si no quedan enemigos: la primera vez cambia de mapa y espera 45 cuadros despues
-// lanza la siguiente oleada.
+// lanza la siguiente oleada. Cada RONDAS_POR_TIENDA rondas completadas se abre la
+// tienda: como el estado pasa a E_TIENDA, esta funcion deja de correr y la espera de
+// 45 cuadros queda congelada hasta que el jugador elija su mejora.
 void GameEngine::pedirOleada() {
+    // Durante el jefe no hay oleadas normales: al quedar sin enemigos se gana.
+    if (jefeActivo) {
+        if (enemigos.n == 0) terminarJefe();
+        return;
+    }
     if (!oleadas.terminada(enemigos.n)) return;
     if (!esperando) {
         esperando = true;
         pausaOleada = 45;
         proyectiles.n = 0;
+        rondasCompletadas++;
+        if (oleadas.oleadaActual() >= OLEADAS_ANTES_DEL_JEFE && !jefeDerrotado) {
+            iniciarJefe();
+            return;
+        }
         siguienteMapa();
+        if (rondasCompletadas % RONDAS_POR_TIENDA == 0 && tienda.abrir())
+            estados.abrirTienda();
     }
     else if (--pausaOleada <= 0) {
         oleadas.lanzar(arena, aCelda(jugador.pos[0]), aCelda(jugador.pos[1]),
@@ -1617,25 +2363,135 @@ void GameEngine::pedirOleada() {
     }
 }
 
+// Carga la arena vacia del jefe, conserva la vida y mejoras del jugador y coloca
+// al jefe en la parte superior. Limpia enemigos, disparos, corazones y bombas.
+void GameEngine::iniciarJefe() {
+    jefeActivo = true;
+    jefeDerrotado = false;
+    esperando = false;
+    pausaOleada = 0;
+    mapa = -1;
+    if (!arena.cargar("boss.txt")) arena.generarSoloBordes();
+
+    enemigos.n = 0;
+    proyectiles.n = 0;
+    corazones.n = 0;
+    bombas.n = 0;
+
+    int px = ARENA_W / 2, py = ARENA_H - 4;
+    jugador.pos[0] = jugador.prev[0] = aFijo(px);
+    jugador.pos[1] = jugador.prev[1] = aFijo(py);
+    jugador.vel[0] = jugador.vel[1] = 0;
+    jugador.inmune = INMUNE_JUGADOR;
+
+    Jefe::agregar(enemigos, aFijo(ARENA_W / 2 - 1), aFijo(3));
+}
+
+// El jefe murio: se eliminan sus amenazas y se pasa a la pantalla de victoria.
+void GameEngine::terminarJefe() {
+    jefeActivo = false;
+    jefeDerrotado = true;
+    enemigos.n = 0;
+    proyectiles.n = 0;
+    corazones.n = 0;
+    bombas.n = 0;
+    estados.victoria();
+}
+
+// Coloca una bomba en una celda libre, lejos del jugador y del jefe. El limite
+// MAX_BOMBAS evita que la arena se sature.
+void GameEngine::colocarBomba() {
+    if (bombas.n >= MAX_BOMBAS) return;
+    int px = aCelda(jugador.pos[0]), py = aCelda(jugador.pos[1]);
+    int bx = 0, by = 0;
+    bool encontrada = false;
+    for (int intento = 0; intento < 80 && !encontrada; intento++) {
+        int x = 2 + std::rand() % (ARENA_W - 4);
+        int y = 2 + std::rand() % (ARENA_H - 4);
+        if (arena.esPared(x, y)) continue;
+        if (std::max(std::abs(x - px), 2 * std::abs(y - py)) < 5) continue;
+        bool cercaJefe = false;
+        for (uint32_t i = 0; i < enemigos.n; i++) {
+            if (enemigos.tipo[i] != JEFE) continue;
+            int jx = aCelda(enemigos.pos[2 * i]), jy = aCelda(enemigos.pos[2 * i + 1]);
+            if (x >= jx - 1 && x <= jx + 2 && y >= jy - 1 && y <= jy + 2) cercaJefe = true;
+        }
+        if (cercaJefe) continue;
+        bool cercaOtra = false;
+        for (uint32_t i = 0; i < bombas.n; i++)
+            if (aCelda(bombas.pos[2 * i]) == x && aCelda(bombas.pos[2 * i + 1]) == y)
+                cercaOtra = true;
+        if (cercaOtra) continue;
+        bx = x;
+        by = y;
+        encontrada = true;
+    }
+    if (!encontrada) return;
+    if (bombas.agregar(0, 1, aFijo(bx), aFijo(by), 0, 0))
+        bombas.espera[bombas.n - 1] = BOMBA_AVISO;
+}
+
+// Avanza el temporizador de cada bomba: aviso -> explosion -> eliminacion.
+void GameEngine::actualizarBombas() {
+    for (uint32_t i = 0; i < bombas.n;) {
+        if (bombas.estado[i] == 0) {
+            if (--bombas.espera[i] <= 0) {
+                bombas.estado[i] = 1;
+                bombas.vida[i] = BOMBA_EXPLOSION;
+            }
+            i++;
+        }
+        else if (--bombas.vida[i] <= 0) {
+            bombas.eliminar(i);
+        }
+        else {
+            i++;
+        }
+    }
+}
+
 // Arma el cuadro completo en el buffer: menu, o arena + entidades + HUD (y pausa/derrota encima).
 void GameEngine::pintar() {
     render.limpiar();
     EstadoPartida e = estados.actual();
-    if (e == E_MENU) {
-        HUDManager::menu(render);
+    if (e == E_BOOT) {
+        HUDManager::boot(render, bootFrame);
+    }
+    else if (e == E_MENU) {
+        HUDManager::menu(render, titulo, estados.seleccionMenu());
+    }
+    else if (e == E_OPCIONES) {
+        HUDManager::opciones(render, estados.seleccionOpciones(), estados.volumen());
+    }
+    else if (e == E_CREDITOS) {
+        HUDManager::creditos(render);
+    }
+    else if (e == E_VICTORIA) {
+        HUDManager::victoria(render, puntaje);
     }
     else {
         DatosHUD d;
         d.vida = jugador.vida < 0 ? 0 : jugador.vida;
+        d.vidaMax = jugador.vidaMax;
         d.oleada = oleadas.oleadaActual();
         d.enemigos = (int)enemigos.n;
         d.puntaje = puntaje;
-        d.mapa = nombreMapa(mapa);
+        d.mapa = jefeActivo ? "Arena del Jefe" : nombreMapa(mapa);
         d.esperando = esperando && enemigos.n == 0;
+        d.escudo = efectos.escudo;
+        d.escudoListo = efectos.escudoListo;
+        d.escudoTimer = efectos.escudoTimer;
+        d.jefe = jefeActivo;
+        d.jefeVida = 0;
+        d.jefeVidaMax = VIDA_JEFE;
+        for (uint32_t i = 0; i < enemigos.n; i++)
+            if (enemigos.tipo[i] == JEFE) d.jefeVida = enemigos.vida[i] < 0 ? 0 : enemigos.vida[i];
         render.pintarArena(arena);
         render.pintarEntidades(arena, jugador, enemigos, proyectiles, corazones);
+        render.pintarBombas(bombas);
         HUDManager::dibujar(render, d);
         if (e == E_PAUSA) HUDManager::pausa(render);
+        if (e == E_TIENDA) HUDManager::tienda(render, tienda, rondasCompletadas, oleadas.oleadaActual() + 1);
         if (e == E_FIN) HUDManager::derrota(render, d);
     }
 }
@@ -1759,6 +2615,7 @@ int main(int argc, char** argv) {
         }
     }
 
+    std::setlocale(LC_ALL, "");
     instalarSenales();
     GameEngine juego;
 

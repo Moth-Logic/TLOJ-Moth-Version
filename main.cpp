@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <unistd.h>
+#include "audio.h"
 
 
 // CONSTANTES DEL JUEGO
@@ -64,6 +65,7 @@ const int DESVIO_CUADROS = 45;
 // Corazones: probabilidad (%) de que un enemigo muerto suelte uno, cuadros que
 // dura en el suelo y cuadros finales en los que parpadea.
 const int PROB_CORAZON = 25;      // % de probabilidad de que un enemigo suelte un corazon
+const int PROB_CORAZON_JEFE = 10; // % de probabilidad de que el jefe suelte un corazon al ser golpeado
 const int VIDA_CORAZON = 450;     // cuadros que dura un corazon en el suelo (15 s)
 const int CORAZON_PARPADEA = 90;  // en los ultimos cuadros el corazon parpadea
 // Mejoras: la tienda aparece cada RONDAS_POR_TIENDA rondas completadas y el escudo
@@ -321,9 +323,16 @@ public:
     Rect rect() const;
     Rect zonaGolpe() const;
     bool golpeActivo() const { return golpe > 0; }
+    // Verdadero solo en el cuadro en que empezo un ataque nuevo (no en cada
+    // cuadro que el ataque sigue activo ni mientras se mantiene la tecla).
+    bool inicioAtaque() const { return ataqueIniciado; }
+    // Verdadero solo si el ultimo recibirDano() realmente quito vida.
+    bool danoAplicado() const { return danoSufrido; }
 private:
     int quiereX, quiereY, mantenerX, mantenerY;
     bool quiereAtacar;
+    bool ataqueIniciado = false;
+    bool danoSufrido = false;
 };
 
 // FnDisparo: funcion que el Game Engine le entrega a los enemigos para crear
@@ -341,7 +350,7 @@ namespace Enemigos {
 
 // Proyectiles: crean y mueven en linea recta los disparos de Arqueros y Magos.
 namespace Proyectiles {
-    void crear(Entidades& p, int32_t x, int32_t y, int32_t vx, int32_t vy);
+    bool crear(Entidades& p, int32_t x, int32_t y, int32_t vx, int32_t vy);
     void mover(Entidades& p);
 }
 
@@ -527,7 +536,8 @@ void instalarSenales();
 class StateManager {
 public:
     EstadoPartida actual() const { return estado; }
-    void procesar(const Comando& c, bool& iniciarPartida, bool& salir);
+    // 'navegar' se pone en true cuando UP/DOWN cambian la opcion seleccionada.
+    void procesar(const Comando& c, bool& iniciarPartida, bool& salir, bool& navegar);
     void derrota() { estado = E_FIN; }
     void victoria() { estado = E_VICTORIA; }
     void forzarJugando() { estado = E_JUGANDO; }
@@ -578,6 +588,7 @@ private:
     Entidades bombas;
     bool jefeActivo = false;
     bool jefeDerrotado = false;
+    Audio audio;
 
     void cargarTitulo();
     void cargarMapa(int i);
@@ -589,6 +600,8 @@ private:
     void logica(const std::vector<Comando>& cmds);
     void actualizarEntidades();
     bool revisarColisiones();
+    bool danoAlJugador();
+    void actualizarAudio();
     void limpiarMuertos();
     void soltarCorazon(int32_t x, int32_t y);
     void recogerCorazones();
@@ -884,6 +897,8 @@ void Jugador::reiniciar(int cx, int cy) {
     dirGolpe = ABAJO;
     quiereX = quiereY = mantenerX = mantenerY = 0;
     quiereAtacar = false;
+    ataqueIniciado = false;
+    danoSufrido = false;
 }
 
 // Copia al jugador los valores que modifican las mejoras. Si el nucleo reforzado
@@ -920,6 +935,7 @@ void Jugador::leerComandos(const std::vector<Comando>& cmds) {
 // (se mantiene MANTENER_TECLA cuadros tras soltar), guarda la posicion anterior
 // mueve con mover_entidades() y si ya paso la espera inicia el ataque
 void Jugador::actualizar() {
+    ataqueIniciado = false;
     if (inmune > 0) inmune--;
     if (espera > 0) espera--;
     if (golpe > 0) golpe--;
@@ -949,15 +965,18 @@ void Jugador::actualizar() {
         golpe = GOLPE_DURACION;
         dirGolpe = mira;
         espera = esperaGolpe;
+        ataqueIniciado = true;
     }
     quiereAtacar = false;
 }
 
 // Resta 1 de vida y activa la invulnerabilidad (si no la tenia) devuelves true si la vida llego a 0
 bool Jugador::recibirDano() {
+    danoSufrido = false;
     if (inmune > 0) return false;
     vida--;
     inmune = inmuneCuadros;
+    danoSufrido = true;
     return vida <= 0;
 }
 
@@ -1125,8 +1144,9 @@ void Enemigos::aturdir(Entidades& e, uint32_t i, int cuadros) {
 }
 
 // Crea un proyectil en la posicion del enemigo que disparo, con la velocidad dada.
-void Proyectiles::crear(Entidades& p, int32_t x, int32_t y, int32_t vx, int32_t vy) {
-    p.agregar(0, 1, x, y, vx, vy);
+// Devuelve false si el arreglo ya esta lleno (en ese caso tampoco suena el disparo).
+bool Proyectiles::crear(Entidades& p, int32_t x, int32_t y, int32_t vx, int32_t vy) {
+    return p.agregar(0, 1, x, y, vx, vy);
 }
 
 // Avanza todos los proyectiles en linea recta con una sola llamada a mover_entidades().
@@ -1944,7 +1964,8 @@ void instalarSenales() {
 }
 
 // Aplica un comando a la maquina de estados (ver la descripcion de StateManager).
-void StateManager::procesar(const Comando& c, bool& iniciarPartida, bool& salir) {
+void StateManager::procesar(const Comando& c, bool& iniciarPartida, bool& salir, bool& navegar) {
+    navegar = false;
     if (c.accion == SALIR) {
         // En los submenus Q/Esc vuelven al menu; en el resto de estados sale.
         if (estado == E_OPCIONES || estado == E_CREDITOS) {
@@ -1958,8 +1979,8 @@ void StateManager::procesar(const Comando& c, bool& iniciarPartida, bool& salir)
         case E_BOOT:
             break;
         case E_MENU:
-            if (c.accion == MOVER && c.dir == ARRIBA) selMenu = (selMenu + 3) % 4;
-            else if (c.accion == MOVER && c.dir == ABAJO) selMenu = (selMenu + 1) % 4;
+            if (c.accion == MOVER && c.dir == ARRIBA) { selMenu = (selMenu + 3) % 4; navegar = true; }
+            else if (c.accion == MOVER && c.dir == ABAJO) { selMenu = (selMenu + 1) % 4; navegar = true; }
             else if (c.accion == ENTER) {
                 if (selMenu == 0) {
                     estado = E_JUGANDO;
@@ -1971,8 +1992,8 @@ void StateManager::procesar(const Comando& c, bool& iniciarPartida, bool& salir)
             }
             break;
         case E_OPCIONES:
-            if (c.accion == MOVER && c.dir == ARRIBA) selOpc = 0;
-            else if (c.accion == MOVER && c.dir == ABAJO) selOpc = 1;
+            if (c.accion == MOVER && c.dir == ARRIBA) { selOpc = 0; navegar = true; }
+            else if (c.accion == MOVER && c.dir == ABAJO) { selOpc = 1; navegar = true; }
             else if (c.accion == ENTER) {
                 if (selOpc == 0) vol = std::min(100, vol + 10);
                 else vol = std::max(0, vol - 10);
@@ -2024,6 +2045,7 @@ void GameEngine::cargarTitulo() {
 // Inicia ncurses, el renderer, la semilla aleatoria y carga el titulo y el primer mapa.
 void GameEngine::inicializar() {
     std::srand((unsigned)std::time(nullptr));
+    audio.iniciar();
     input.iniciar();
     render.iniciar();
     cargarTitulo();
@@ -2090,6 +2112,7 @@ int GameEngine::ejecutar() {
         cuadro();
         controlarTiempo(inicio);
     }
+    audio.cerrar();
     input.cerrar();
     return 0;
 }
@@ -2111,8 +2134,11 @@ void GameEngine::cuadro() {
         return;
     }
     bool iniciar = false;
-    for (size_t i = 0; i < cmds.size(); i++)
-        estados.procesar(cmds[i], iniciar, salir);
+    for (size_t i = 0; i < cmds.size(); i++) {
+        bool navegar = false;
+        estados.procesar(cmds[i], iniciar, salir, navegar);
+        if (navegar) audio.seleccion();
+    }
     if (salir) return;
     if (iniciar) nuevaPartida();
     if (estados.actual() == E_JUGANDO) logica(cmds);
@@ -2133,6 +2159,7 @@ void GameEngine::procesarTienda(const std::vector<Comando>& cmds) {
         else if (c.accion == ELEGIR3) opcion = 2;
         if (opcion < 0) continue;
         if (tienda.elegir(opcion, efectos)) {
+            audio.mejora();
             jugador.aplicarMejoras(efectos);
             tienda.cerrar();
             estados.cerrarTienda();
@@ -2158,8 +2185,10 @@ void GameEngine::logica(const std::vector<Comando>& cmds) {
 // Jugador movimientos y acciones de los enemigos (con la funcion para crear proyectiles) y movimiento de enemigos y proyectiles.
 void GameEngine::actualizarEntidades() {
     jugador.actualizar();
+    if (jugador.inicioAtaque()) audio.ataque();
     auto disparar = [this](int32_t x, int32_t y, int32_t vx, int32_t vy) {
-        Proyectiles::crear(proyectiles, x, y, vx, vy);
+        // Solo se dispara cuando el arquero, el mago o el jefe crean el proyectil.
+        if (Proyectiles::crear(proyectiles, x, y, vx, vy)) audio.disparo();
     };
     Enemigos::actualizar(enemigos, jugador.pos, disparar);
     Jefe::actualizar(enemigos, jugador.pos, disparar, [this]() { colocarBomba(); });
@@ -2192,6 +2221,15 @@ void GameEngine::actualizarEscudo() {
         efectos.escudoListo = true;
         efectos.escudoTimer = 0;
     }
+}
+
+// Unico punto donde el jugador recibe dano: si el escudo lo bloquea o la
+// invulnerabilidad lo impide, no suena el efecto de herido.
+bool GameEngine::danoAlJugador() {
+    if (escudoAbsorbe()) return false;
+    bool murio = jugador.recibirDano();
+    if (jugador.danoAplicado()) audio.dano();
+    return murio;
 }
 
 // Si el escudo esta listo, absorbe el golpe entrante, empieza a recargar y deja al
@@ -2235,7 +2273,7 @@ bool GameEngine::revisarColisiones() {
         for (uint32_t j = 0; j < enemigos.n; j++)
             if (res[j] && enemigos.vida[j] > 0) hayContacto = true;
         if (hayContacto && jugador.inmune == 0) {
-            if (!escudoAbsorbe() && jugador.recibirDano()) murio = true;
+            if (danoAlJugador()) murio = true;
             for (uint32_t j = 0; j < enemigos.n; j++)
                 if (res[j] && enemigos.vida[j] > 0 && enemigos.tipo[j] != JEFE)
                     empujarEnemigo(j);
@@ -2248,8 +2286,15 @@ bool GameEngine::revisarColisiones() {
         const uint8_t* res = colisionador.comparar(&z, 1, re, enemigos.n);
         for (uint32_t j = 0; j < enemigos.n; j++)
             if (res[j] && arena.lineaLibre(aCelda(jugador.pos[0]), aCelda(jugador.pos[1]),
-                aCelda(enemigos.pos[2 * j]), aCelda(enemigos.pos[2 * j + 1])))
+                aCelda(enemigos.pos[2 * j]), aCelda(enemigos.pos[2 * j + 1]))) {
+                // El golpe solo cuenta si el enemigo no estaba inmune; el jefe, al
+                // recibir dano, tiene una probabilidad de soltar un corazon.
+                bool golpeValido = enemigos.inmune[j] == 0 && enemigos.vida[j] > 0;
+                bool eraJefe = enemigos.tipo[j] == JEFE;
                 Enemigos::recibirDano(enemigos, j, efectos.danoEspada);
+                if (golpeValido && eraJefe && std::rand() % 100 < PROB_CORAZON_JEFE)
+                    soltarCorazon(enemigos.pos[2 * j], enemigos.pos[2 * j + 1]);
+            }
     }
 
     if (proyectiles.n > 0) {
@@ -2257,7 +2302,7 @@ bool GameEngine::revisarColisiones() {
         for (uint32_t i = 0; i < proyectiles.n; i++) {
             if (res[i] && proyectiles.vida[i] > 0) {
                 // Mientras el jugador ya es invulnerable el disparo se pierde, pero no gasta el escudo.
-                if (jugador.inmune == 0 && !escudoAbsorbe() && jugador.recibirDano()) murio = true;
+                if (jugador.inmune == 0 && danoAlJugador()) murio = true;
                 proyectiles.vida[i] = 0;
             }
         }
@@ -2270,7 +2315,7 @@ bool GameEngine::revisarColisiones() {
                  2 * BOMBA_RADIO + 1, 2 * BOMBA_RADIO + 1 };
         uint8_t toca = 0;
         colisiones(&rj, 1, &rb, 1, &toca);
-        if (toca && jugador.inmune == 0 && !escudoAbsorbe() && jugador.recibirDano()) murio = true;
+        if (toca && jugador.inmune == 0 && danoAlJugador()) murio = true;
     }
     return murio;
 }
@@ -2280,7 +2325,7 @@ void GameEngine::limpiarMuertos() {
     for (uint32_t i = 0; i < enemigos.n;) {
         if (enemigos.vida[i] <= 0) {
             if (enemigos.tipo[i] == JEFE) {
-                puntaje += 1000;           // el jefe no suelta corazones
+                puntaje += 1000;           // el jefe solo puede soltar corazon al ser golpeado, no al morir
             }
             else {
                 puntaje += 10;
@@ -2450,6 +2495,29 @@ void GameEngine::actualizarBombas() {
     }
 }
 
+// Elige la musica segun el estado de la partida y aplica el volumen de Opciones.
+void GameEngine::actualizarAudio() {
+    audio.ajustarVolumen(estados.volumen());
+    switch (estados.actual()) {
+        case E_MENU:
+        case E_OPCIONES:
+        case E_CREDITOS:
+        case E_FIN:
+        case E_VICTORIA:
+            audio.reproducirMusica(Audio::MUSICA_MENU);
+            break;
+        case E_JUGANDO:
+        case E_PAUSA:
+            audio.reproducirMusica(jefeActivo ? Audio::MUSICA_JEFE : Audio::MUSICA_BATALLA);
+            break;
+        case E_TIENDA:
+            audio.reproducirMusica(Audio::MUSICA_TIENDA);
+            break;
+        case E_BOOT:
+            break;                      // el arranque queda en silencio
+    }
+}
+
 // Arma el cuadro completo en el buffer: menu, o arena + entidades + HUD (y pausa/derrota encima).
 void GameEngine::pintar() {
     render.limpiar();
@@ -2497,6 +2565,7 @@ void GameEngine::pintar() {
 }
 // Pinta el buffer y lo manda a la pantalla.
 void GameEngine::dibujar() {
+    actualizarAudio();
     pintar();
     render.refrescar();
 }

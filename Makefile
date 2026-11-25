@@ -16,9 +16,10 @@
 
 CXX      ?= g++
 TARGET   := june
-SRC      := main.cpp
+SRC      := main.cpp audio.cpp
 CXXFLAGS := -std=c++17 -O2 -Wall -Wextra
 LDLIBS   :=
+UNAME_S  := $(shell uname -s)
 
 # ncurses: en Linux el header es <ncurses.h>; en MSYS2/MinGW queda en
 # include/ncursesw, asi que se busca en ambos lugares.
@@ -39,11 +40,21 @@ endif
 CXXFLAGS += $(NCURSES_CFLAGS)
 LDLIBS   += $(NCURSES_LIBS)
 
+# miniaudio carga ALSA/PulseAudio en Linux (dlopen) y usa los winmm/ole32 de
+# Windows; no requiere instalar ninguna biblioteca de audio aparte.
+ifneq (,$(findstring MINGW,$(UNAME_S)))
+    LDLIBS += -lwinmm -lole32
+else ifneq (,$(findstring MSYS,$(UNAME_S)))
+    LDLIBS += -lwinmm -lole32
+else
+    LDLIBS += -lm -ldl -lpthread
+endif
+
 .PHONY: all run bench bench-pantalla clean
 
 all: $(TARGET)
 
-$(TARGET): $(SRC)
+$(TARGET): $(SRC) audio.h third_party/miniaudio.h
 	$(CXX) $(CXXFLAGS) $(SRC) -o $@ $(LDLIBS)
 
 run: $(TARGET)

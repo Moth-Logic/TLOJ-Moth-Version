@@ -19,6 +19,7 @@ proyectiles, atacá con la espada y sobreviví oleadas cada vez más difíciles.
 
 - 10 puntos de vida, dibujados como `[##########]`; cada golpe quita uno.
 - Al morir, un enemigo puede soltar un corazón que recupera vida.
+- El jefe final tiene un 10% de probabilidad de soltar un corazón cada vez que recibe un golpe.
 - Tres tipos de enemigo: soldados, arqueros y magos.
 - La partida corre a 30 cuadros por segundo, sin punto flotante (posiciones en punto fijo).
 

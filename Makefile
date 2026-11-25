@@ -48,6 +48,17 @@ else ifneq (,$(findstring MSYS,$(UNAME_S)))
     LDLIBS += -lwinmm -lole32
 else
     LDLIBS += -lm -ldl -lpthread
+    # En Raspberry Pi OS de 32 bits (armhf) el CPU no tiene atomicos de 64
+    # bits lock-free, asi que miniaudio termina llamando a __atomic_load_8 /
+    # __atomic_store_8 / __atomic_compare_exchange_8, que viven en libatomic.
+    # Se enlaza solo si el compilador la tiene disponible.
+    LIBATOMIC := $(shell $(CXX) -print-file-name=libatomic.so)
+    ifeq ($(LIBATOMIC),libatomic.so)
+        LIBATOMIC := $(shell $(CXX) -print-file-name=libatomic.a)
+    endif
+    ifneq ($(LIBATOMIC),libatomic.a)
+        LDLIBS += -latomic
+    endif
 endif
 
 .PHONY: all run bench bench-pantalla clean

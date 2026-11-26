@@ -73,9 +73,14 @@ const int CORAZON_PARPADEA = 90;  // en los ultimos cuadros el corazon parpadea
 const int RONDAS_POR_TIENDA = 3;
 const int ESCUDO_RECARGA = 300;
 
-// Jefe final: aparece despues de la oleada 5 en una arena vacia. Sus flechas
-// salen en una lluvia de 3 y las bombas tienen aviso antes de explotar.
-const int OLEADAS_ANTES_DEL_JEFE = 5;
+// PROGRESION INFINITA Y JEFES
+// La partida no tiene final por oleadas: el contador sube sin limite. Cada hito
+// de HITOS_JEFE lanza un jefe distinto (el ultimo requiere haber vencido a todos
+// los anteriores). Despues del ultimo hito las oleadas normales continuan.
+const int NUM_JEFES = 6;
+const int HITOS_JEFE[NUM_JEFES] = { 5, 10, 15, 20, 25, 30 };
+
+// Jefe original: arena boss.txt, lluvia de 3 flechas y bombas con aviso.
 const int VIDA_JEFE = 60;
 const int JEFE_ESPERA_DISPARO = 90;   // cuadros entre lluvias de flechas (3 s)
 const int JEFE_ESPERA_BOMBA = 240;    // cuadros entre bombas (8 s)
@@ -84,6 +89,47 @@ const int MAX_BOMBAS = 2;
 const int BOMBA_AVISO = 45;           // cuadros de parpadeo antes de explotar (1.5 s)
 const int BOMBA_EXPLOSION = 10;       // cuadros que dura la explosion
 const int BOMBA_RADIO = 2;            // radio en celdas (cuadrado de 5x5)
+
+// Serpiente: el cuerpo son celdas del historial de la cabeza. Cada PASO cuadros
+// avanza una celda; al perder vida acelera (PASO baja hasta SERPIENTE_PASO_MIN).
+const int VIDA_SERPIENTE = 30;
+const int SERPIENTE_LARGO = 9;
+const int SERPIENTE_LARGO_MAX = 20;
+const int SERPIENTE_PASO = 6;
+const int SERPIENTE_PASO_MIN = 2;
+const int SERPIENTE_HISTORIAL = 64;
+
+// La Copia: imita al jugador (misma velocidad base) y embiste con la espada.
+const int VIDA_COPIA = 20;
+const int COPIA_ESPERA_EMBESTIDA = 70;
+const int COPIA_EMBESTIDA = 12;
+
+// Mago Mimico: 1 real + 3 copias, todas identicas. El real brilla un cuadro
+// cada MIMICO_PISTA cuadros (pista sutil) y clona de nuevo periodicamente.
+const int VIDA_MIMICO = 16;
+const int MIMICO_COPIAS = 3;
+const int MIMICO_CLONA = 300;
+const int MIMICO_PISTA = 90;
+
+// Robot: teletransporte con aviso (ROBOT_AVISO cuadros) y recarga larga.
+const int VIDA_ROBOT = 40;
+const int ROBOT_AVISO = 28;
+const int ROBOT_RECARGA = 150;
+const int ROBOT_DISPARO = 55;
+
+// El Juego: corazon fijo en el centro y muros hostiles que se mueven y disparan.
+const int VIDA_CORAZON_JUEGO = 50;
+const int MAX_MUROS = 4;
+const int MURO_DISPARO = 70;
+const int MURO_ANCHO = 2;
+const int MAX_AVISOS = 8;
+
+// Cine del jefe final: cuadros por linea de dialogo y pausas dramaticas.
+const int CINE_LINEA = 80;            // tiempo entre lineas (2.6 s)
+const int CINE_ENTRADA = 45;          // silencio antes de la primera linea
+const int CINE_FUNDIDO = 60;          // cuadros que tardan las paredes en volverse rojas
+const int CINE_ANTES_DEL_COMBATE = 70;
+const int CINE_ANTES_DE_APAGAR = 90;
 
 // Velocidades en punto fijo (celdas por cuadro x 256). Las celdas de la consola
 // son aprox. el doble de altas que de anchas, por eso la velocidad vertical es
@@ -94,13 +140,27 @@ const int32_t VEL_ARQ_X = 40, VEL_ARQ_Y = 20;
 const int32_t VEL_MAG_X = 36, VEL_MAG_Y = 18;
 const int32_t VEL_PROY_X = 96, VEL_PROY_Y = 48;
 const int32_t VEL_JEFE_X = 32, VEL_JEFE_Y = 16;
+const int32_t VEL_COPIA_X = 96, VEL_COPIA_Y = 48;    // misma base que el jugador
+const int32_t VEL_MIMICO_X = 24, VEL_MIMICO_Y = 12;
+const int32_t VEL_ROBOT_X = 48, VEL_ROBOT_Y = 24;
+const int32_t VEL_MURO_X = 48, VEL_MURO_Y = 24;
 
 // Direcciones, acciones que produce el Input Handler, tipos de enemigo y
-// estados de los enemigos.
+// estados de los enemigos. Los tipos de jefe viven en el mismo arreglo de
+// Entidades para reutilizar movimiento, colisiones, dano y dibujo.
 enum Dir { ARRIBA, ABAJO, IZQUIERDA, DERECHA };
 enum Accion { NADA, MOVER, ATACAR, PAUSA, SALIR, ENTER, ELEGIR1, ELEGIR2, ELEGIR3 };
-enum TipoEnemigo { SOLDADO, ARQUERO, MAGO, JEFE };
+enum TipoEnemigo { SOLDADO, ARQUERO, MAGO, JEFE, SERPIENTE, COPIA, MIMICO, ROBOT, CORAZON_JUEGO };
 enum EstadoEnemigo { PERSEGUIR, DISPARAR, HERIDO };
+
+// Identificador de cada jefe del recorrido (el orden es el de los hitos).
+enum JefeId { JEFE_ORIGINAL, JEFE_SERPIENTE, JEFE_COPIA, JEFE_MIMICO, JEFE_ROBOT, JEFE_JUEGO };
+
+// Un enemigo es "jefe" si tiene IA propia (no la generica de Enemigos) o si es
+// el corazon del juego. Sirve para separar el trato especial en colisiones.
+inline bool esTipoJefe(int t) {
+    return t == JEFE || t == COPIA || t == MIMICO || t == ROBOT || t == CORAZON_JUEGO;
+}
 
 // Comando: lo que el Input Handler le entrega al Game Engine (accion + direccion).
 // Rect: rectangulo alineado a los ejes en CELDAS (x, y, ancho, alto); es la
@@ -289,6 +349,9 @@ struct Entidades {
     int32_t desvio[MAX_ENT] = {};
     int32_t desvioVel[2 * MAX_ENT] = {};
     int32_t bombaEspera[MAX_ENT] = {};   // solo la usa el jefe
+    int32_t fase[MAX_ENT] = {};          // contador propio de cada jefe
+    int32_t aux[MAX_ENT] = {};           // segundo contador / recarga
+    int32_t obj[2 * MAX_ENT] = {};       // objetivo (teletransporte, embestida)
     uint32_t n = 0;
 
     bool agregar(int t, int v, int32_t x, int32_t y, int32_t vx, int32_t vy);
@@ -340,9 +403,11 @@ private:
 typedef std::function<void(int32_t x, int32_t y, int32_t vx, int32_t vy)> FnDisparo;
 
 // Enemigos: IA por estados (perseguir, disparar, herido), movimiento y dano.
+// 'nivel' es la oleada actual: con oleadas infinitas la velocidad sube de a poco
+// (con tope) para que el desafio crezca sin volverse imposible de golpe.
 namespace Enemigos {
     bool agregar(Entidades& e, int tipo, int vida, int32_t x, int32_t y);
-    void actualizar(Entidades& e, const int32_t* posJugador, const FnDisparo& disparar);
+    void actualizar(Entidades& e, const int32_t* posJugador, const FnDisparo& disparar, int nivel = 1);
     void mover(Entidades& e);
     bool recibirDano(Entidades& e, uint32_t i, int dano = 1);
     void aturdir(Entidades& e, uint32_t i, int cuadros);
@@ -365,6 +430,48 @@ namespace Jefe {
     void actualizar(Entidades& e, const int32_t* jugador, const FnDisparo& disparar, const FnBomba& bomba);
 }
 
+// SERPIENTE: la cabeza y el cuerpo se guardan aparte de Entidades porque el cuerpo
+// es un historial de celdas (no entidades independientes). Asi el indice de cada
+// segmento nunca se corre al eliminar y el cuerpo no puede "romperse".
+struct SerpienteJefe {
+    bool activa = false;
+    int32_t vida = 0, vidaMax = 0;
+    int largo = SERPIENTE_LARGO;
+    int dir = DERECHA;
+    int32_t cuerpo[SERPIENTE_HISTORIAL][2] = {};   // cuerpo[0] es la cabeza
+    int celdas = 0;                                 // cuantas celdas de cuerpo son validas
+    int paso = SERPIENTE_PASO;
+    int espera = 0;
+    int parpadeo = 0;
+    int inmune = 0;
+
+    void reiniciar(int32_t x, int32_t y, int dir0);
+    void actualizar(const Arena& arena, const int32_t* jugador);
+    // Rect 1x1 de cada segmento (para colisiones y dibujo).
+    void rects(Rect* out, int& n) const;
+};
+
+// COPIA: reflejo del jugador. Persigue con la misma velocidad y embiste con la
+// espada; su identidad esta en imitar el movimiento y el ataque del jugador.
+namespace Copia {
+    bool agregar(Entidades& e, int32_t x, int32_t y);
+    void actualizar(Entidades& e, const int32_t* jugador);
+}
+
+// Mago Mimico: 'estado' 1 = mago real, 0 = copia descartable. Todas se dibujan igual.
+namespace Mimico {
+    bool agregar(Entidades& e, int32_t x, int32_t y);
+    void actualizar(Entidades& e, const Arena& arena, const int32_t* jugador, const FnDisparo& disparar);
+    void clonar(Entidades& e, const Arena& arena);
+}
+
+// Robot: se teletransporta con aviso previo (la marca vive en el arreglo 'avisos').
+namespace Robot {
+    bool agregar(Entidades& e, int32_t x, int32_t y);
+    void actualizar(Entidades& e, Entidades& avisos, const Arena& arena,
+                    const int32_t* jugador, const FnDisparo& disparar);
+}
+
 // WAVE MANAGER 
 // FnAgregar: funcion que el Game Engine le entrega al Enemy Spawner para agregar
 // un enemigo al Entity System.
@@ -374,19 +481,24 @@ typedef std::function<bool(int tipo, int vida, int32_t x, int32_t y)> FnAgregar;
 class WaveCounter {
 public:
     void reiniciar() { oleada = 0; }
-    void subir() { oleada++; }
-    int actual() const { return oleada; }
+    // Contador de 64 bits: la progresion es infinita sin desbordar el int del HUD.
+    void subir() { if (oleada < 0x7fffffffLL) oleada++; }
+    int actual() const { return (int)oleada; }
     bool terminada(uint32_t vivos) const { return vivos == 0; }
 private:
-    int oleada = 0;
+    long long oleada = 0;
 };
 
 // DifficultyScaler: cuantos enemigos salen (2n-1), de que tipo y con cuanta vida.
+// Todo se calcula con enteros de 64 bits y luego se acota, para que oleadas muy
+// altas no desborden ni generen cantidades absurdas.
 class DifficultyScaler {
 public:
     int cantidad(int oleada) const;
     int tipo(int oleada, int i) const;
     int vida(int oleada, int tipo) const;
+    // Escala de velocidad en punto fijo (256 = 1x), con tope.
+    int32_t velocidad(int oleada) const;
 };
 
 // EnemySpawner: elige un punto libre y lejos del jugador y crea el enemigo.
@@ -425,6 +537,7 @@ class ASCIISpriteMgr {
 public:
     void cargar();
     Sprite jugador, soldado, arquero, mago, jefe;
+    Sprite copia, robot, corazonJuego;
     Sprite protH, protV, protM;
     Sprite golpe, marca, corazon;
     static bool visible(int parpadeo) { return parpadeo % 2 == 0; }
@@ -445,6 +558,7 @@ struct DatosHUD {
     bool jefe;
     int jefeVida;
     int jefeVidaMax;
+    const char* jefeNombre;
 };
 
 // Renderer: dibuja todo primero en un buffer de caracteres (no en la pantalla) por
@@ -454,10 +568,13 @@ class Renderer {
 public:
     void iniciar(bool conPantalla = true);
     void limpiar();
-    void pintarArena(const Arena& arena);
+    // 'rojo' (0..100) funde los bordes de azul a rojo en el jefe final.
+    void pintarArena(const Arena& arena, int rojo = 0);
     void pintarEntidades(const Arena& arena, const Jugador& j, const Entidades& enemigos, const Entidades& proy, const Entidades& corazones);
     void pintarBombas(const Entidades& bombas);
     void pintarSprite(const Sprite& s, int cx, int cy, int color);
+    // Escribe un caracter directamente en una celda de la arena (capas de jefes).
+    void pintarCaracter(int cx, int cy, char ch, int color);
     void limpiarZona(int x, int y, int ancho, int alto);
     void texto(int x, int y, const std::string& s, int color);
     void textoCentrado(int y, const std::string& s, int color);
@@ -491,6 +608,8 @@ public:
     static void pausa(Renderer& r);
     static void derrota(Renderer& r, const DatosHUD& d);
     static void tienda(Renderer& r, const TiendaMejoras& t, int rondas, int siguienteOleada);
+    // Cine del jefe final: lineas de dialogo centradas sobre la arena.
+    static void dialogo(Renderer& r, const std::vector<std::string>& lineas, int linea);
 };
 
 // GAME ENGINE
@@ -524,8 +643,10 @@ struct BenchCuadro {
 
 void reporteBench(const BenchCuadro& b);
 
-// Estados de la partida: arranque, menu, submenus, jugando, pausa, tienda y fin.
-enum EstadoPartida { E_BOOT, E_MENU, E_OPCIONES, E_CREDITOS, E_JUGANDO, E_PAUSA, E_TIENDA, E_FIN, E_VICTORIA };
+// Estados de la partida: arranque, menu, submenus, jugando, pausa, tienda, fin y
+// la cinematica del jefe final. En E_CINE no corre la logica normal: la maneja
+// GameEngine::actualizarCine().
+enum EstadoPartida { E_BOOT, E_MENU, E_OPCIONES, E_CREDITOS, E_JUGANDO, E_PAUSA, E_TIENDA, E_FIN, E_VICTORIA, E_CINE };
 
 extern volatile std::sig_atomic_t senalSalir;
 void instalarSenales();
@@ -548,6 +669,9 @@ public:
     // La tienda congela la partida: mientras el estado sea E_TIENDA no corre logica().
     void abrirTienda() { estado = E_TIENDA; }
     void cerrarTienda() { estado = E_JUGANDO; }
+    // Cinematica del jefe final: congela la logica igual que la tienda.
+    void iniciarCine() { estado = E_CINE; }
+    void cerrarCine() { estado = E_JUGANDO; }
 private:
     EstadoPartida estado = E_BOOT;
     int selMenu = 0;
@@ -586,9 +710,21 @@ private:
     int bootFrame = 0;
     std::vector<std::string> titulo;
     Entidades bombas;
+    Entidades muros;      // muros hostiles del jefe final
+    Entidades avisos;     // marcas de teletransporte / avisos del robot
+    SerpienteJefe serpiente;
     bool jefeActivo = false;
-    bool jefeDerrotado = false;
+    int jefeActual = -1;                       // JefeId en curso (-1: ninguno)
+    bool jefesVencidos[NUM_JEFES] = {};        // registro de derrotas de la partida
+    bool jefeAbatido = false;                  // el jefe de este cuadro cayo
+    bool corazonRoto = false;                  // el corazon del juego llego a 0
     Audio audio;
+
+    // Cine del jefe final: fase 0 = llegada, fase 1 = despedida, -1 = inactivo.
+    int cineFase = -1;
+    int cineTimer = 0;
+    int cineLinea = 0;
+    int rojoBorde = 0;                         // 0..100 fundido de bordes a rojo
 
     void cargarTitulo();
     void cargarMapa(int i);
@@ -607,12 +743,21 @@ private:
     void recogerCorazones();
     void pedirOleada();
     void procesarTienda(const std::vector<Comando>& cmds);
-    void iniciarJefe();
+    void iniciarJefe(int id);
     void terminarJefe();
+    int jefeParaOleada(int oleada) const;
     void colocarBomba();
     void actualizarBombas();
     void actualizarEscudo();
     bool escudoAbsorbe();
+    void actualizarMuros();
+    void actualizarAvisos();
+    void golpearJefes(uint32_t j);
+    void vidaDelJefe(int& vida, int& vidaMax, const char** nombre) const;
+    void iniciarJuegoFinal();
+    void iniciarCineFinal();
+    void actualizarCine();
+    void pintarExtras();
     void pintar();
     void dibujar();
     void controlarTiempo(const timespec& inicio);
@@ -854,6 +999,9 @@ bool Entidades::agregar(int t, int v, int32_t x, int32_t y, int32_t vx, int32_t 
     desvio[i] = 0;
     desvioVel[2 * i] = desvioVel[2 * i + 1] = 0;
     bombaEspera[i] = 0;
+    fase[i] = 0;
+    aux[i] = 0;
+    obj[2 * i] = obj[2 * i + 1] = 0;
     return true;
 }
 
@@ -878,6 +1026,10 @@ void Entidades::eliminar(uint32_t i) {
         desvioVel[2 * i] = desvioVel[2 * u];
         desvioVel[2 * i + 1] = desvioVel[2 * u + 1];
         bombaEspera[i] = bombaEspera[u];
+        fase[i] = fase[u];
+        aux[i] = aux[u];
+        obj[2 * i] = obj[2 * u];
+        obj[2 * i + 1] = obj[2 * u + 1];
     }
     n--;
 }
@@ -1012,8 +1164,11 @@ bool Enemigos::agregar(Entidades& e, int tipo, int vida, int32_t x, int32_t y) {
 //    donde la diferencia con el jugador es mayor cuando esta alineado y en rango
 //  - Mago: mantiene distancia y dispara un proyectil apuntando al jugador
 //  - Si quedo trabado contra un obstaculo, rodea durante DESVIO_CUADROS cuadros
-// 'disparar' es la funcion que entrega el Game Engine para crear proyectiles
-void Enemigos::actualizar(Entidades& e, const int32_t* jug, const FnDisparo& disparar) {
+// 'disparar' es la funcion que entrega el Game Engine para crear proyectiles.
+// 'nivel' solo escala la velocidad de desplazamiento (con tope en DifficultyScaler).
+void Enemigos::actualizar(Entidades& e, const int32_t* jug, const FnDisparo& disparar, int nivel) {
+    int32_t esc = 256 + std::min(nivel, 60) * 4;   // 1x .. 1.94x
+    auto vel = [esc](int32_t base) { return (int32_t)((int64_t)base * esc / 256); };
     for (uint32_t i = 0; i < e.n; i++) {
         int32_t* p = &e.pos[2 * i];
         int32_t* v = &e.vel[2 * i];
@@ -1031,8 +1186,8 @@ void Enemigos::actualizar(Entidades& e, const int32_t* jug, const FnDisparo& dis
             v[0] = v[1] = 0;
             continue;
         }
-        // El jefe tiene su propia IA en Jefe::actualizar().
-        if (e.tipo[i] == JEFE) continue;
+        // Los jefes tienen su propia IA (Jefe, Copia, Mimico, Robot).
+        if (esTipoJefe(e.tipo[i])) continue;
         
         int32_t ovx = v[0], ovy = v[1];
         bool trabado = (ovx != 0 || ovy != 0) && p[0] == e.prev[2 * i] && p[1] == e.prev[2 * i + 1];
@@ -1043,21 +1198,21 @@ void Enemigos::actualizar(Entidades& e, const int32_t* jug, const FnDisparo& dis
 
         if (e.tipo[i] == SOLDADO) {
             e.estado[i] = PERSEGUIR;
-            v[0] = limitar(dx, VEL_SOL_X);
-            v[1] = limitar(dy, VEL_SOL_Y);
+            v[0] = limitar(dx, vel(VEL_SOL_X));
+            v[1] = limitar(dy, vel(VEL_SOL_Y));
         }
         else if (e.tipo[i] == ARQUERO) {
             bool horiz = std::abs(dx) >= std::abs(dy);
             if (horiz) {
-                v[1] = limitar(dy, VEL_ARQ_Y);
-                if (adx > 14) v[0] = signo(dx) * VEL_ARQ_X;
-                else if (adx < 8) v[0] = -signo(dx) * VEL_ARQ_X;
+                v[1] = limitar(dy, vel(VEL_ARQ_Y));
+                if (adx > 14) v[0] = signo(dx) * vel(VEL_ARQ_X);
+                else if (adx < 8) v[0] = -signo(dx) * vel(VEL_ARQ_X);
                 else v[0] = 0;
             }
             else {
-                v[0] = limitar(dx, VEL_ARQ_X);
-                if (ady > 7) v[1] = signo(dy) * VEL_ARQ_Y;
-                else if (ady < 3) v[1] = -signo(dy) * VEL_ARQ_Y;
+                v[0] = limitar(dx, vel(VEL_ARQ_X));
+                if (ady > 7) v[1] = signo(dy) * vel(VEL_ARQ_Y);
+                else if (ady < 3) v[1] = -signo(dy) * vel(VEL_ARQ_Y);
                 else v[1] = 0;
             }
             e.estado[i] = (v[0] == 0 && v[1] == 0) ? DISPARAR : PERSEGUIR;
@@ -1075,12 +1230,12 @@ void Enemigos::actualizar(Entidades& e, const int32_t* jug, const FnDisparo& dis
         }
         else {
             if (dist > 18) {
-                v[0] = signo(dx) * VEL_MAG_X;
-                v[1] = signo(dy) * VEL_MAG_Y;
+                v[0] = signo(dx) * vel(VEL_MAG_X);
+                v[1] = signo(dy) * vel(VEL_MAG_Y);
             }
             else if (dist < 10) {
-                v[0] = -signo(dx) * VEL_MAG_X;
-                v[1] = -signo(dy) * VEL_MAG_Y;
+                v[0] = -signo(dx) * vel(VEL_MAG_X);
+                v[1] = -signo(dy) * vel(VEL_MAG_Y);
             }
             else {
                 v[0] = v[1] = 0;
@@ -1233,6 +1388,352 @@ void Jefe::actualizar(Entidades& e, const int32_t* jug, const FnDisparo& dispara
     }
 }
 
+// SERPIENTE
+// El cuerpo es el historial de celdas de la cabeza: al avanzar una celda, cada
+// segmento hereda la celda del anterior. Nunca hay dos segmentos en la misma celda
+// (el movimiento rechaza entrar al propio cuerpo), asi que el dibujo y las
+// colisiones siempre son consistentes.
+void SerpienteJefe::reiniciar(int32_t x, int32_t y, int dir0) {
+    activa = true;
+    vida = vidaMax = VIDA_SERPIENTE;
+    largo = SERPIENTE_LARGO;
+    dir = dir0;
+    paso = SERPIENTE_PASO;
+    espera = SERPIENTE_PASO;
+    parpadeo = inmune = 0;
+    celdas = largo;
+    int dx = (dir == IZQUIERDA) ? -1 : 1;
+    for (int k = 0; k < celdas; k++) {
+        int cx = x + dx * k;
+        if (cx < 1) cx = 1;
+        if (cx > ARENA_W - 2) cx = ARENA_W - 2;
+        cuerpo[k][0] = cx;
+        cuerpo[k][1] = y;
+    }
+}
+
+// True si la celda esta libre para la cabeza. La cola se libera al mismo tiempo
+// que la cabeza avanza, por eso entrar en la ultima celda del cuerpo es valido,
+// salvo cuando el cuerpo esta creciendo: ahi la cola se queda y habria solape.
+static bool celdaLibreSerpiente(const Arena& arena, int x, int y,
+                                const int32_t cuerpo[][2], int celdas, bool creciendo) {
+    if (arena.esPared(x, y)) return false;
+    for (int k = 0; k < celdas; k++) {
+        if (cuerpo[k][0] == x && cuerpo[k][1] == y)
+            return k == celdas - 1 && !creciendo;
+    }
+    return true;
+}
+
+void SerpienteJefe::actualizar(const Arena& arena, const int32_t* jug) {
+    if (!activa) return;
+    if (parpadeo > 0) parpadeo--;
+    if (inmune > 0) inmune--;
+
+    // Cuanto mas herida, mas larga y mas rapida: el encuentro se vuelve mas dificil.
+    int deseado = SERPIENTE_LARGO + (vidaMax - vida) / 6;
+    if (deseado > SERPIENTE_LARGO_MAX) deseado = SERPIENTE_LARGO_MAX;
+    if (deseado > largo) largo = deseado;
+    paso = SERPIENTE_PASO - (vidaMax - vida) / 8;
+    if (paso < SERPIENTE_PASO_MIN) paso = SERPIENTE_PASO_MIN;
+
+    if (--espera > 0) return;
+    espera = paso;
+
+    int hx = cuerpo[0][0], hy = cuerpo[0][1];
+    int px = aCelda(jug[0]), py = aCelda(jug[1]);
+    int dx = px - hx, dy = py - hy;
+
+    // Orden de preferencia: acercarse por el eje dominante, luego por el otro y
+    // por ultimo las direcciones que alejan. Se prueba cada una y se usa la
+    // primera celda valida; si ninguna lo es, la serpiente espera un turno.
+    Dir cand[4];
+    int nc = 0;
+    if (std::abs(dx) >= std::abs(dy)) {
+        cand[nc++] = dx >= 0 ? DERECHA : IZQUIERDA;
+        cand[nc++] = dy >= 0 ? ABAJO : ARRIBA;
+        cand[nc++] = dy >= 0 ? ARRIBA : ABAJO;
+        cand[nc++] = dx >= 0 ? IZQUIERDA : DERECHA;
+    }
+    else {
+        cand[nc++] = dy >= 0 ? ABAJO : ARRIBA;
+        cand[nc++] = dx >= 0 ? DERECHA : IZQUIERDA;
+        cand[nc++] = dx >= 0 ? IZQUIERDA : DERECHA;
+        cand[nc++] = dy >= 0 ? ARRIBA : ABAJO;
+    }
+    // Un giro al azar hace que el cuerpo rodee y no solo persiga en linea recta.
+    if (std::rand() % 100 < 12) {
+        int a = std::rand() % nc, b = std::rand() % nc;
+        std::swap(cand[a], cand[b]);
+    }
+
+    bool creciendo = (largo > celdas);
+    int nx = hx, ny = hy;
+    for (int k = 0; k < nc; k++) {
+        int tx = hx, ty = hy;
+        if (cand[k] == ARRIBA) ty--;
+        else if (cand[k] == ABAJO) ty++;
+        else if (cand[k] == IZQUIERDA) tx--;
+        else tx++;
+        if (!celdaLibreSerpiente(arena, tx, ty, cuerpo, celdas, creciendo)) continue;
+        nx = tx; ny = ty; dir = cand[k];
+        break;
+    }
+    if (nx == hx && ny == hy) return;
+
+    int maxCeldas = std::min(largo, SERPIENTE_HISTORIAL);
+    int usar = std::min(celdas, maxCeldas - 1);
+    if (usar < 1) usar = 1;
+    for (int k = usar; k > 0; k--) {
+        cuerpo[k][0] = cuerpo[k - 1][0];
+        cuerpo[k][1] = cuerpo[k - 1][1];
+    }
+    cuerpo[0][0] = nx;
+    cuerpo[0][1] = ny;
+    if (celdas < maxCeldas) celdas++;
+}
+
+void SerpienteJefe::rects(Rect* out, int& n) const {
+    n = 0;
+    if (!activa) return;
+    for (int k = 0; k < celdas && n < SERPIENTE_HISTORIAL; k++)
+        out[n++] = Rect{ cuerpo[k][0], cuerpo[k][1], 1, 1 };
+}
+
+// LA COPIA
+// Persigue con la velocidad del jugador (un poco menor), telegrafia y embiste con
+// la espada. La identidad del jefe es imitar el movimiento y el ataque del jugador.
+bool Copia::agregar(Entidades& e, int32_t x, int32_t y) {
+    if (!e.agregar(COPIA, VIDA_COPIA, x, y, 0, 0)) return false;
+    uint32_t i = e.n - 1;
+    e.espera[i] = COPIA_ESPERA_EMBESTIDA;
+    e.fase[i] = 0;
+    e.aux[i] = 0;
+    return true;
+}
+
+void Copia::actualizar(Entidades& e, const int32_t* jug) {
+    for (uint32_t i = 0; i < e.n; i++) {
+        if (e.tipo[i] != COPIA) continue;
+        int32_t* p = &e.pos[2 * i];
+        int32_t* v = &e.vel[2 * i];
+        if (e.parpadeo[i] > 0 || e.aturdido[i] > 0) { v[0] = v[1] = 0; continue; }
+
+        if (e.aux[i] > 0) {
+            // Embestida en curso: conserva la velocidad fijada al empezar.
+            e.aux[i]--;
+            if (e.aux[i] == 0) e.espera[i] = COPIA_ESPERA_EMBESTIDA;
+            continue;
+        }
+        if (e.fase[i] > 0) {
+            // Aviso antes de embestir (igual que el jugador prepara el golpe).
+            e.fase[i]--;
+            v[0] = v[1] = 0;
+            if (e.fase[i] == 0) {
+                e.aux[i] = COPIA_EMBESTIDA;
+                int32_t dx = jug[0] - p[0], dy = jug[1] - p[1];
+                int64_t m = std::max<int64_t>(std::abs(dx), 2 * (int64_t)std::abs(dy));
+                if (m == 0) m = 1;
+                e.vel[2 * i] = (int32_t)((int64_t)dx * VEL_COPIA_X / m);
+                e.vel[2 * i + 1] = (int32_t)((int64_t)dy * VEL_COPIA_X / m);
+            }
+            continue;
+        }
+
+        int32_t dx = jug[0] - p[0], dy = jug[1] - p[1];
+        int adx = std::abs(dx) >> FP_BITS, ady = std::abs(dy) >> FP_BITS;
+        int dist = std::max(adx, 2 * ady);
+        v[0] = limitar(dx, VEL_COPIA_X * 3 / 4);
+        v[1] = limitar(dy, VEL_COPIA_Y * 3 / 4);
+        if (dist <= 5 && e.espera[i] == 0) {
+            e.fase[i] = 14;
+            v[0] = v[1] = 0;
+        }
+    }
+}
+
+// EL MAGO MIMICO
+// Una entidad real (estado 1) y varias copias (estado 0) con el mismo tipo, sprite
+// y color. Solo el real puede matar al jefe; golpear una copia tiene un costo.
+bool Mimico::agregar(Entidades& e, int32_t x, int32_t y) {
+    if (!e.agregar(MIMICO, VIDA_MIMICO, x, y, 0, 0)) return false;
+    uint32_t i = e.n - 1;
+    e.aux[i] = 1;                    // 1 = mago real (aux no lo toca la IA generica)
+    e.fase[i] = MIMICO_CLONA;
+    e.espera[i] = 80;
+    return true;
+}
+
+// Elige una celda libre al azar lejos del jugador para una copia nueva.
+static void celdaCopia(const Arena& arena, const Entidades& e, const int32_t* jug, int& cx, int& cy) {
+    for (int intento = 0; intento < 200; intento++) {
+        int x = 2 + std::rand() % (ARENA_W - 4);
+        int y = 2 + std::rand() % (ARENA_H - 4);
+        if (arena.esPared(x, y)) continue;
+        if (std::max(std::abs(x - aCelda(jug[0])), 2 * std::abs(y - aCelda(jug[1]))) < 6) continue;
+        bool ocupada = false;
+        for (uint32_t i = 0; i < e.n; i++)
+            if (e.tipo[i] == MIMICO && aCelda(e.pos[2 * i]) == x && aCelda(e.pos[2 * i + 1]) == y)
+                ocupada = true;
+        if (ocupada) continue;
+        cx = x; cy = y;
+        return;
+    }
+    cx = 2 + std::rand() % (ARENA_W - 4);
+    cy = 2 + std::rand() % (ARENA_H - 4);
+    arena.libreCerca(cx, cy);
+}
+
+// Crea las copias que falten, alrededor de la posicion del mago real. Se llama al
+// empezar el encuentro y cada MIMICO_CLONA cuadros.
+void Mimico::clonar(Entidades& e, const Arena& arena) {
+    int realI = -1;
+    int copias = 0;
+    for (uint32_t i = 0; i < e.n; i++) {
+        if (e.tipo[i] != MIMICO) continue;
+        if (e.aux[i] == 1) realI = (int)i;
+        else if (e.vida[i] > 0) copias++;
+    }
+    if (realI < 0) return;
+    int32_t jug[2] = { e.pos[2 * realI], e.pos[2 * realI + 1] };
+    for (int k = copias; k < MIMICO_COPIAS; k++) {
+        int cx, cy;
+        celdaCopia(arena, e, jug, cx, cy);
+        if (!e.agregar(MIMICO, 1, aFijo(cx), aFijo(cy), 0, 0)) return;
+        uint32_t i = e.n - 1;
+        e.aux[i] = 0;                       // 0 = copia descartable
+        e.espera[i] = 90 + std::rand() % 60;
+        e.fase[i] = 0;
+    }
+}
+
+void Mimico::actualizar(Entidades& e, const Arena& arena, const int32_t* jug, const FnDisparo& disparar) {
+    bool hayReal = false;
+    for (uint32_t i = 0; i < e.n; i++)
+        if (e.tipo[i] == MIMICO && e.aux[i] == 1 && e.vida[i] > 0) hayReal = true;
+    if (!hayReal) return;
+
+    for (uint32_t i = 0; i < e.n; i++) {
+        if (e.tipo[i] != MIMICO) continue;
+        int32_t* p = &e.pos[2 * i];
+        int32_t* v = &e.vel[2 * i];
+        if (e.parpadeo[i] > 0 || e.aturdido[i] > 0) { v[0] = v[1] = 0; continue; }
+
+        bool real = (e.aux[i] == 1);
+        int32_t dx = jug[0] - p[0], dy = jug[1] - p[1];
+        int adx = std::abs(dx) >> FP_BITS, ady = std::abs(dy) >> FP_BITS;
+        int dist = std::max(adx, 2 * ady);
+
+        if (real) {
+            // El real mantiene la distancia de un mago y strafea: es la pista sutil.
+            if (dist > 16) { v[0] = signo(dx) * VEL_MIMICO_X; v[1] = signo(dy) * VEL_MIMICO_Y; }
+            else if (dist < 9) { v[0] = -signo(dx) * VEL_MIMICO_X; v[1] = -signo(dy) * VEL_MIMICO_Y; }
+            else { v[0] = 0; v[1] = signo(dy) * VEL_MIMICO_Y; }
+
+            if (--e.fase[i] <= 0) {
+                e.fase[i] = MIMICO_CLONA;
+                Mimico::clonar(e, arena);
+            }
+            // Un parpadeo de un solo cuadro delata al verdadero de vez en cuando.
+            if (e.fase[i] % MIMICO_PISTA == 1) e.parpadeo[i] = 1;
+        }
+        else {
+            // Las copias persiguen de frente: su patron no es el del real.
+            v[0] = (dist > 2) ? signo(dx) * VEL_MIMICO_X : 0;
+            v[1] = (dist > 2) ? signo(dy) * VEL_MIMICO_Y : 0;
+        }
+
+        if (e.espera[i] == 0 && dist <= 30) {
+            int64_t m = std::max<int64_t>(std::abs(dx), 2 * (int64_t)std::abs(dy));
+            if (m == 0) m = 1;
+            int32_t vx = (int32_t)((int64_t)dx * VEL_PROY_X / m);
+            int32_t vy = (int32_t)((int64_t)dy * VEL_PROY_X / m);
+            disparar(p[0], p[1], vx, vy);
+            e.espera[i] = real ? 100 : 150;
+        }
+    }
+}
+
+// EL ROBOT QUE SE TELETRANSPORTA
+// Avisa con una marca parpadeante, desaparece y reaparece en el aviso, donde
+// dispara una cruz de proyectiles. La recarga evita un salto constante.
+bool Robot::agregar(Entidades& e, int32_t x, int32_t y) {
+    if (!e.agregar(ROBOT, VIDA_ROBOT, x, y, 0, 0)) return false;
+    uint32_t i = e.n - 1;
+    e.espera[i] = ROBOT_DISPARO;
+    e.fase[i] = 0;                 // cuenta atras del aviso
+    e.aux[i] = ROBOT_RECARGA;      // recarga del teletransporte
+    return true;
+}
+
+// Celda libre valida para reaparecer: nunca fuera de la arena ni sobre una pared.
+static void celdaTeleporte(const Arena& arena, const int32_t* jug, int& cx, int& cy) {
+    int px = aCelda(jug[0]), py = aCelda(jug[1]);
+    for (int intento = 0; intento < 200; intento++) {
+        int x = 2 + std::rand() % (ARENA_W - 4);
+        int y = 2 + std::rand() % (ARENA_H - 4);
+        if (arena.esPared(x, y) || arena.esPared(x + 1, y)) continue;
+        if (std::max(std::abs(x - px), 2 * std::abs(y - py)) < 7) continue;
+        cx = x; cy = y;
+        return;
+    }
+    cx = ARENA_W / 2; cy = 2;
+    arena.libreCerca(cx, cy);
+}
+
+void Robot::actualizar(Entidades& e, Entidades& avisos, const Arena& arena,
+                       const int32_t* jug, const FnDisparo& disparar) {
+    for (uint32_t i = 0; i < e.n; i++) {
+        if (e.tipo[i] != ROBOT) continue;
+        int32_t* p = &e.pos[2 * i];
+        int32_t* v = &e.vel[2 * i];
+        if (e.parpadeo[i] > 0 || e.aturdido[i] > 0) { v[0] = v[1] = 0; continue; }
+
+        if (e.fase[i] > 0) {
+            // Aviso en curso: el robot se queda quieto (y vulnerable) hasta reaparecer.
+            v[0] = v[1] = 0;
+            if (--e.fase[i] == 0) {
+                p[0] = e.prev[2 * i] = e.obj[2 * i];
+                p[1] = e.prev[2 * i + 1] = e.obj[2 * i + 1];
+                // Cruz de disparos desde la nueva posicion, hacia donde este el jugador.
+                const int32_t ejes[2] = { VEL_PROY_X, VEL_PROY_Y };
+                dispararHacia(disparar, p[0], p[1], jug[0], jug[1]);
+                disparar(p[0], p[1], ejes[0], 0);
+                disparar(p[0], p[1], -ejes[0], 0);
+                disparar(p[0], p[1], 0, ejes[1]);
+                disparar(p[0], p[1], 0, -ejes[1]);
+                e.espera[i] = ROBOT_DISPARO;
+            }
+            continue;
+        }
+
+        if (e.aux[i] > 0) e.aux[i]--;
+        if (e.aux[i] == 0) {
+            int cx, cy;
+            celdaTeleporte(arena, jug, cx, cy);
+            e.obj[2 * i] = aFijo(cx);
+            e.obj[2 * i + 1] = aFijo(cy);
+            e.fase[i] = ROBOT_AVISO;
+            e.aux[i] = ROBOT_RECARGA;
+            if (avisos.n < (uint32_t)MAX_AVISOS &&
+                avisos.agregar(0, 1, aFijo(cx), aFijo(cy), 0, 0))
+                avisos.espera[avisos.n - 1] = ROBOT_AVISO;
+            v[0] = v[1] = 0;
+            continue;
+        }
+
+        // Entre saltos se desplaza de lado y dispara apuntado.
+        int32_t dx = jug[0] - p[0], dy = jug[1] - p[1];
+        if (std::abs(dx) >= std::abs(dy)) { v[0] = 0; v[1] = signo(dy) * VEL_ROBOT_Y; }
+        else { v[0] = signo(dx) * VEL_ROBOT_X; v[1] = 0; }
+
+        if (e.espera[i] == 0) {
+            dispararHacia(disparar, p[0], p[1], jug[0], jug[1]);
+            e.espera[i] = ROBOT_DISPARO;
+        }
+    }
+}
+
 // Tienda de mejoras 
 // Empieza una partida nueva sin mejoras compradas ni ofertas pendientes.
 void TiendaMejoras::reiniciar() {
@@ -1296,25 +1797,47 @@ void TiendaMejoras::aplicarMejora(int tipo, EfectosMejoras& fx) {
 }
 
 // Wave Manager 
-// En la oleada n salen 2n-1 enemigos (1, 3, 5, 7...), con tope de 60.
+// En la oleada n salen 2n-1 enemigos (1, 3, 5...), con tope de 60. El calculo se
+// hace en 64 bits y se acota: la progresion es infinita, el arreglo de entidades no.
 int DifficultyScaler::cantidad(int oleada) const {
-    return std::min(2 * oleada - 1, 60);
+    if (oleada < 1) oleada = 1;
+    int64_t n = 2LL * oleada - 1;
+    if (n > 60) n = 60;
+    return (int)n;
 }
 
 // Tipo del enemigo numero i de la oleada. Oleada 1: solo Soldado. Oleada 2: Soldado,
-// Arquero y Mago. Desde la 3: uno de cada tres es de distancia (Arqueros; desde la 5
-// alternan con Magos).
+// Arquero y Mago. Desde la 3: uno de cada tres es de distancia. Cada 5 oleadas
+// alterna el tipo de distancia y, desde la 9, los enemigos de linea no son todos
+// Soldados: aparecen Magos sueltos para variar la composicion.
 int DifficultyScaler::tipo(int oleada, int i) const {
     if (oleada == 2) return i == 1 ? ARQUERO : (i == 2 ? MAGO : SOLDADO);   // 2da oleada: Soldado + Arquero + Mago
-    if (oleada < 3 || i % 3 != 2) return SOLDADO;
-    if (oleada < 5) return ARQUERO;
-    return ((i / 3) % 2 == 0) ? ARQUERO : MAGO;
+    if (oleada < 3 || i % 3 != 2) {
+        // Oleadas altas: de vez en cuando la linea trae un Mago en lugar de Soldado.
+        if (oleada >= 9 && i % 7 == 4) return MAGO;
+        return SOLDADO;
+    }
+    int bloque = (oleada - 1) / 5;               // cambia cada 5 oleadas
+    return (bloque % 2 == 0) ? ARQUERO : MAGO;
 }
 
-// Vida base 2 (Mago 3), mas 1 cada 5 oleadas.
+// Vida base 2 (Mago 3), mas 1 cada 5 oleadas. Se acota a VIDA_ENEMIGO_MAX para
+// que un numero de oleada enorme no desborde ni haga la partida irresoluble.
+static const int VIDA_ENEMIGO_MAX = 400;
 int DifficultyScaler::vida(int oleada, int tipo) const {
-    int base = (tipo == MAGO) ? 3 : 2;
-    return base + (oleada - 1) / 5;
+    if (oleada < 1) oleada = 1;
+    int64_t base = (tipo == MAGO) ? 3 : 2;
+    int64_t v = base + (oleada - 1) / 5;
+    if (v > VIDA_ENEMIGO_MAX) v = VIDA_ENEMIGO_MAX;
+    return (int)v;
+}
+
+// Escala de velocidad: +4/256 por oleada hasta 1.75x. Asi la dificultad sube
+// gradualmente en varios parametros a la vez (cantidad, vida, composicion, ritmo).
+int32_t DifficultyScaler::velocidad(int oleada) const {
+    if (oleada < 1) oleada = 1;
+    int64_t extra = std::min<int64_t>(oleada, 60) * 4;
+    return (int32_t)(256 + extra);
 }
 
 // Elige una celda libre al azar y lejos del jugador (si no encuentra, usa la primera libre).
@@ -1365,6 +1888,9 @@ void ASCIISpriteMgr::cargar() {
     arquero = Sprite{ "A", 1, 1 };
     mago = Sprite{ "M", 1, 1 };
     jefe = Sprite{ "BBBB", 2, 2 };
+    copia = Sprite{ "@", 1, 1 };              // reflejo del jugador
+    robot = Sprite{ "R", 1, 1 };
+    corazonJuego = Sprite{ "\\|/" "-@-" "/|\\", 3, 3 };
     protH = Sprite{ "-", 1, 1 };
     protV = Sprite{ "|", 1, 1 };
     protM = Sprite{ "*", 1, 1 };
@@ -1401,13 +1927,17 @@ void Renderer::limpiar() {
             u8[y][x].clear();
 }
 
-// Capa 1: paredes de la arena.
-void Renderer::pintarArena(const Arena& arena) {
+// Capa 1: paredes de la arena. Con 'rojo' > 0 las paredes se funden de azul a
+// rojo de forma gradual (cada celda cruza su umbral en un momento distinto, pero
+// el resultado es determinista: no parpadea).
+void Renderer::pintarArena(const Arena& arena, int rojo) {
     for (int y = 0; y < ARENA_H; y++) {
         for (int x = 0; x < ARENA_W; x++) {
             if (arena.esPared(x, y)) {
-                buf[ARENA_Y + y][ARENA_X + x] = '#';
-                col[ARENA_Y + y][ARENA_X + x] = C_AZUL;
+                int bx = ARENA_X + x, by = ARENA_Y + y;
+                buf[by][bx] = '#';
+                int umbral = (x * 37 + y * 53) % 100;
+                col[by][bx] = (rojo > umbral) ? C_ROJO : C_AZUL;
             }
         }
     }
@@ -1432,6 +1962,16 @@ void Renderer::pintarSprite(const Sprite& s, int cx, int cy, int color) {
             if (s.datos[f * s.ancho + c] != ' ') col[by][bx] = (unsigned char)color;
         }
     }
+}
+
+// Escribe un caracter directo en una celda de la arena (muros, serpiente, avisos).
+void Renderer::pintarCaracter(int cx, int cy, char ch, int color) {
+    int bx = ARENA_X + cx, by = ARENA_Y + cy;
+    if (bx < 0 || by < 0 || bx >= PANT_W || by >= PANT_H) return;
+    buf[by][bx] = ch;
+    col[by][bx] = (unsigned char)color;
+    inv[by][bx] = false;
+    u8[by][bx].clear();
 }
 
 // Capa 2: zona de golpe (o la marca de hacia donde mira), corazones, enemigos (los
@@ -1463,9 +2003,13 @@ void Renderer::pintarEntidades(const Arena& arena, const Jugador& j, const Entid
     for (uint32_t i = 0; i < enemigos.n; i++) {
         if (!ASCIISpriteMgr::visible(enemigos.parpadeo[i])) continue;
         int cx = aCelda(enemigos.pos[2 * i]), cy = aCelda(enemigos.pos[2 * i + 1]);
-        if (enemigos.tipo[i] == JEFE) pintarSprite(sprites.jefe, cx, cy, C_MAGENTA);
-        else if (enemigos.tipo[i] == SOLDADO) pintarSprite(sprites.soldado, cx, cy, C_ROJO);
-        else if (enemigos.tipo[i] == ARQUERO) pintarSprite(sprites.arquero, cx, cy, C_AMARILLO);
+        int t = enemigos.tipo[i];
+        if (t == JEFE) pintarSprite(sprites.jefe, cx, cy, C_MAGENTA);
+        else if (t == SOLDADO) pintarSprite(sprites.soldado, cx, cy, C_ROJO);
+        else if (t == ARQUERO) pintarSprite(sprites.arquero, cx, cy, C_AMARILLO);
+        else if (t == COPIA) pintarSprite(sprites.copia, cx, cy, C_ROJO);
+        else if (t == ROBOT) pintarSprite(sprites.robot, cx, cy, C_CIAN);
+        else if (t == CORAZON_JUEGO) pintarSprite(sprites.corazonJuego, cx - 1, cy - 1, C_ROJO);
         else pintarSprite(sprites.mago, cx, cy, C_MAGENTA);
     }
 
@@ -1611,6 +2155,15 @@ void Renderer::refrescar() {
     refresh();
 }
 
+// Cine del jefe final: cada linea se escribe centrada sobre una franja limpia para
+// que el texto se lea aunque haya paredes o entidades detras.
+void HUDManager::dialogo(Renderer& r, const std::vector<std::string>& lineas, int linea) {
+    if (linea < 0 || linea >= (int)lineas.size()) return;
+    int y = 10;
+    r.limpiarZona(ARENA_X, y, ARENA_W, 3);
+    r.textoCentrado(y, lineas[linea], C_BLANCO);
+}
+
 // Capa 3 (HUD): vida con corazones, oleada, enemigos que quedan, puntos, mapa y controles.
 void HUDManager::dibujar(Renderer& r, const DatosHUD& d) {
     // Barra de vida de ancho fijo: cada golpe apaga un '#' y el ']' no se mueve.
@@ -1629,6 +2182,7 @@ void HUDManager::dibujar(Renderer& r, const DatosHUD& d) {
         std::string b = "JEFE [";
         for (int i = 0; i < SEG; i++) b += (i < llenos) ? '#' : '.';
         b += "]";
+        if (d.jefeNombre) b += std::string(" ") + d.jefeNombre;
         r.textoCentrado(1, b, C_MAGENTA);
     }
     if (d.escudo) {
@@ -2011,6 +2565,9 @@ void StateManager::procesar(const Comando& c, bool& iniciarPartida, bool& salir,
         case E_TIENDA:
             // La tienda la maneja GameEngine::procesarTienda(), no la maquina de estados.
             break;
+        case E_CINE:
+            // El cine lo maneja GameEngine::actualizarCine().
+            break;
         case E_FIN:
             if (c.accion == ENTER) estado = E_MENU;
             break;
@@ -2092,8 +2649,17 @@ void GameEngine::nuevaPartida(int mapaFijo) {
     proyectiles.n = 0;
     corazones.n = 0;
     bombas.n = 0;
+    muros.n = 0;
+    avisos.n = 0;
+    serpiente.activa = false;
     jefeActivo = false;
-    jefeDerrotado = false;
+    jefeActual = -1;
+    jefeAbatido = false;
+    corazonRoto = false;
+    cineFase = -1;
+    cineTimer = cineLinea = 0;
+    rojoBorde = 0;
+    for (int i = 0; i < NUM_JEFES; i++) jefesVencidos[i] = false;
     oleadas.reiniciar();
     efectos = EfectosMejoras{};          // cada partida empieza sin mejoras
     tienda.reiniciar();
@@ -2130,6 +2696,11 @@ void GameEngine::cuadro() {
     }
     if (estados.actual() == E_TIENDA) {
         procesarTienda(cmds);
+        if (!salir) dibujar();
+        return;
+    }
+    if (estados.actual() == E_CINE) {
+        actualizarCine();
         if (!salir) dibujar();
         return;
     }
@@ -2190,11 +2761,64 @@ void GameEngine::actualizarEntidades() {
         // Solo se dispara cuando el arquero, el mago o el jefe crean el proyectil.
         if (Proyectiles::crear(proyectiles, x, y, vx, vy)) audio.disparo();
     };
-    Enemigos::actualizar(enemigos, jugador.pos, disparar);
+    Enemigos::actualizar(enemigos, jugador.pos, disparar, oleadas.oleadaActual());
     Jefe::actualizar(enemigos, jugador.pos, disparar, [this]() { colocarBomba(); });
+    // Cada jefe tiene su IA modular; solo corre la del jefe activo.
+    if (jefeActual == JEFE_SERPIENTE) serpiente.actualizar(arena, jugador.pos);
+    if (jefeActual == JEFE_COPIA) Copia::actualizar(enemigos, jugador.pos);
+    if (jefeActual == JEFE_MIMICO) Mimico::actualizar(enemigos, arena, jugador.pos, disparar);
+    if (jefeActual == JEFE_ROBOT) Robot::actualizar(enemigos, avisos, arena, jugador.pos, disparar);
     Enemigos::mover(enemigos);
     Proyectiles::mover(proyectiles);
     actualizarBombas();
+    actualizarMuros();
+    actualizarAvisos();
+}
+
+// Avisos (marcas de teletransporte): cuentan atras y desaparecen.
+void GameEngine::actualizarAvisos() {
+    for (uint32_t i = 0; i < avisos.n;) {
+        if (--avisos.espera[i] <= 0) avisos.eliminar(i);
+        else i++;
+    }
+}
+
+// Muros hostiles del jefe final: rebotan en los bordes de la arena y disparan al
+// jugador cada MURO_DISPARO cuadros. No son paredes de la cuadricula: son
+// entidades, asi que el jugador nunca queda atrapado entre ellas.
+void GameEngine::actualizarMuros() {
+    for (uint32_t i = 0; i < muros.n; i++) {
+        int32_t* p = &muros.pos[2 * i];
+        int32_t* v = &muros.vel[2 * i];
+        int32_t nx = p[0] + v[0];
+        int32_t ny = p[1] + v[1];
+        int cx = aCelda(nx), cy = aCelda(ny);
+        // Si el muro (2 celdas de ancho) saliera del area o tocara una pared de la
+        // arena, se invierte el eje correspondiente. Nada se sale del buffer.
+        if (arena.esPared(cx, cy) || arena.esPared(cx + 1, cy) || cx < 1 || cx + 1 > ARENA_W - 2)
+            v[0] = -v[0];
+        else
+            p[0] = nx;
+        if (arena.esPared(aCelda(p[0]), aCelda(ny)) || cy < 1 || cy > ARENA_H - 2)
+            v[1] = -v[1];
+        else
+            p[1] = ny;
+        muros.prev[2 * i] = p[0];
+        muros.prev[2 * i + 1] = p[1];
+
+        if (muros.espera[i] > 0) muros.espera[i]--;
+        if (muros.espera[i] == 0 && jefeActual == JEFE_JUEGO) {
+            int32_t ox = p[0] + aFijo(1), oy = p[1];
+            int64_t dx = (int64_t)jugador.pos[0] - ox, dy = (int64_t)jugador.pos[1] - oy;
+            int64_t m = std::max<int64_t>(std::abs(dx), 2 * std::abs(dy));
+            if (m > 0) {
+                int32_t vx = (int32_t)(dx * VEL_PROY_X / m);
+                int32_t vy = (int32_t)(dy * VEL_PROY_X / m);
+                if (Proyectiles::crear(proyectiles, ox, oy, vx, vy)) audio.disparo();
+            }
+            muros.espera[i] = MURO_DISPARO + std::rand() % 40;
+        }
+    }
 }
 
 // Aleja y aturde a un enemigo que acaba de tocar al jugador.
@@ -2250,7 +2874,9 @@ bool GameEngine::revisarColisiones() {
 
     CollisionDetector::frenarContraPared(arena, jugador.pos, jugador.prev);
     for (uint32_t i = 0; i < enemigos.n; i++) {
-        if (enemigos.tipo[i] == JEFE)
+        int t = enemigos.tipo[i];
+        if (t == CORAZON_JUEGO) continue;           // el corazon no se mueve
+        if (t == JEFE)
             CollisionDetector::frenarContraPared2x2(arena, &enemigos.pos[2 * i], &enemigos.prev[2 * i]);
         else
             CollisionDetector::frenarContraPared(arena, &enemigos.pos[2 * i], &enemigos.prev[2 * i]);
@@ -2271,11 +2897,12 @@ bool GameEngine::revisarColisiones() {
         const uint8_t* res = colisionador.comparar(&rj, 1, re, enemigos.n);
         bool hayContacto = false;
         for (uint32_t j = 0; j < enemigos.n; j++)
-            if (res[j] && enemigos.vida[j] > 0) hayContacto = true;
+            if (res[j] && enemigos.vida[j] > 0 && enemigos.tipo[j] != CORAZON_JUEGO) hayContacto = true;
         if (hayContacto && jugador.inmune == 0) {
             if (danoAlJugador()) murio = true;
+            // Los jefes no se empujan: su posicion la controla su IA.
             for (uint32_t j = 0; j < enemigos.n; j++)
-                if (res[j] && enemigos.vida[j] > 0 && enemigos.tipo[j] != JEFE)
+                if (res[j] && enemigos.vida[j] > 0 && !esTipoJefe(enemigos.tipo[j]))
                     empujarEnemigo(j);
             for (uint32_t i = 0; i < enemigos.n; i++) re[i] = enemigos.rect(i);
         }
@@ -2287,14 +2914,82 @@ bool GameEngine::revisarColisiones() {
         for (uint32_t j = 0; j < enemigos.n; j++)
             if (res[j] && arena.lineaLibre(aCelda(jugador.pos[0]), aCelda(jugador.pos[1]),
                 aCelda(enemigos.pos[2 * j]), aCelda(enemigos.pos[2 * j + 1]))) {
-                // El golpe solo cuenta si el enemigo no estaba inmune; el jefe, al
-                // recibir dano, tiene una probabilidad de soltar un corazon.
+                int t = enemigos.tipo[j];
                 bool golpeValido = enemigos.inmune[j] == 0 && enemigos.vida[j] > 0;
-                bool eraJefe = enemigos.tipo[j] == JEFE;
+                if (!golpeValido) continue;
+
+                // Golpear una copia del mago mimico la revienta y da ventaja al
+                // jefe: una rafaga de disparos y un clon mas rapido.
+                if (t == MIMICO && enemigos.aux[j] != 1) {
+                    enemigos.vida[j] = 0;
+                    for (int k = -1; k <= 1; k++) {
+                        int32_t tx = jugador.pos[0] + k * aFijo(2);
+                        dispararHacia([this](int32_t x, int32_t y, int32_t vx, int32_t vy) {
+                            if (Proyectiles::crear(proyectiles, x, y, vx, vy)) audio.disparo();
+                        }, enemigos.pos[2 * j], enemigos.pos[2 * j + 1], tx, jugador.pos[1]);
+                    }
+                    for (uint32_t q = 0; q < enemigos.n; q++)
+                        if (enemigos.tipo[q] == MIMICO && enemigos.aux[q] == 1)
+                            enemigos.fase[q] = std::min(enemigos.fase[q], 60);
+                    continue;
+                }
+
                 Enemigos::recibirDano(enemigos, j, efectos.danoEspada);
-                if (golpeValido && eraJefe && std::rand() % 100 < PROB_CORAZON_JEFE)
+                // El jefe original suelta un corazon al recibir dano.
+                if (t == JEFE && std::rand() % 100 < PROB_CORAZON_JEFE)
                     soltarCorazon(enemigos.pos[2 * j], enemigos.pos[2 * j + 1]);
             }
+    }
+
+    // Golpe a la serpiente: cualquier segmento del cuerpo es valido, pero solo
+    // cuenta uno por ataque (la inmunidad corta evita dano multiple por cuadro).
+    if (jugador.golpeActivo() && serpiente.activa) {
+        Rect segs[SERPIENTE_HISTORIAL];
+        int ns = 0;
+        serpiente.rects(segs, ns);
+        if (ns > 0) {
+            Rect z = jugador.zonaGolpe();
+            uint8_t hb[SERPIENTE_HISTORIAL] = {};
+            colisiones(&z, 1, segs, (uint32_t)ns, hb);
+            int jx = aCelda(jugador.pos[0]), jy = aCelda(jugador.pos[1]);
+            bool toca = false;
+            for (int k = 0; k < ns; k++)
+                if (hb[k] && arena.lineaLibre(jx, jy, segs[k].x, segs[k].y)) { toca = true; break; }
+            if (toca && serpiente.inmune == 0) {
+                serpiente.vida -= efectos.danoEspada;
+                serpiente.inmune = INMUNE_ENEMIGO;
+                serpiente.parpadeo = PARPADEO_CUADROS;
+                if (serpiente.vida <= 0) {
+                    serpiente.vida = 0;
+                    serpiente.activa = false;
+                    jefeAbatido = true;
+                }
+            }
+        }
+    }
+
+    // Contacto con el cuerpo de la serpiente: cualquier segmento hace dano.
+    if (serpiente.activa && jugador.inmune == 0) {
+        Rect segs[SERPIENTE_HISTORIAL];
+        int ns = 0;
+        serpiente.rects(segs, ns);
+        if (ns > 0) {
+            uint8_t hb[SERPIENTE_HISTORIAL] = {};
+            colisiones(&rj, 1, segs, (uint32_t)ns, hb);
+            for (int k = 0; k < ns; k++)
+                if (hb[k]) { if (danoAlJugador()) murio = true; break; }
+        }
+    }
+
+    // Muros hostiles: son peligros moviles, no bloquean el paso.
+    if (muros.n > 0 && jugador.inmune == 0) {
+        Rect rm[MAX_MUROS];
+        for (uint32_t i = 0; i < muros.n; i++)
+            rm[i] = Rect{ aCelda(muros.pos[2 * i]), aCelda(muros.pos[2 * i + 1]), MURO_ANCHO, 1 };
+        uint8_t toca[MAX_MUROS] = {};
+        colisiones(&rj, 1, rm, muros.n, toca);
+        for (uint32_t i = 0; i < muros.n; i++)
+            if (toca[i]) { if (danoAlJugador()) murio = true; break; }
     }
 
     if (proyectiles.n > 0) {
@@ -2324,8 +3019,21 @@ bool GameEngine::revisarColisiones() {
 void GameEngine::limpiarMuertos() {
     for (uint32_t i = 0; i < enemigos.n;) {
         if (enemigos.vida[i] <= 0) {
-            if (enemigos.tipo[i] == JEFE) {
-                puntaje += 1000;           // el jefe solo puede soltar corazon al ser golpeado, no al morir
+            int t = enemigos.tipo[i];
+            if (t == JEFE || t == COPIA || t == ROBOT) {
+                puntaje += 1000;           // los jefes solo sueltan corazon al ser golpeados
+                if (t != JEFE || jefeActual == JEFE_ORIGINAL) jefeAbatido = true;
+            }
+            else if (t == MIMICO) {
+                if (enemigos.aux[i] == 1) {
+                    puntaje += 1000;
+                    jefeAbatido = true;
+                }
+                // Copia descartable: desaparece sin puntos ni aviso al jefe.
+            }
+            else if (t == CORAZON_JUEGO) {
+                puntaje += 5000;
+                corazonRoto = true;
             }
             else {
                 puntaje += 10;
@@ -2380,9 +3088,13 @@ void GameEngine::recogerCorazones() {
 // tienda: como el estado pasa a E_TIENDA, esta funcion deja de correr y la espera de
 // 45 cuadros queda congelada hasta que el jugador elija su mejora.
 void GameEngine::pedirOleada() {
-    // Durante el jefe no hay oleadas normales: al quedar sin enemigos se gana.
+    // Durante un jefe no hay oleadas normales: el jefe avisa cuando cae.
     if (jefeActivo) {
-        if (enemigos.n == 0) terminarJefe();
+        if (jefeActual == JEFE_JUEGO) {
+            if (corazonRoto) iniciarCineFinal();
+            return;
+        }
+        if (jefeAbatido) terminarJefe();
         return;
     }
     if (!oleadas.terminada(enemigos.n)) return;
@@ -2391,8 +3103,11 @@ void GameEngine::pedirOleada() {
         pausaOleada = 45;
         proyectiles.n = 0;
         rondasCompletadas++;
-        if (oleadas.oleadaActual() >= OLEADAS_ANTES_DEL_JEFE && !jefeDerrotado) {
-            iniciarJefe();
+        // Progresion infinita: cada hito lanza su jefe una sola vez. El ultimo
+        // (El Juego) exige que todos los anteriores esten vencidos.
+        int id = jefeParaOleada(oleadas.oleadaActual());
+        if (id >= 0) {
+            iniciarJefe(id);
             return;
         }
         siguienteMapa();
@@ -2408,20 +3123,48 @@ void GameEngine::pedirOleada() {
     }
 }
 
-// Carga la arena vacia del jefe, conserva la vida y mejoras del jugador y coloca
-// al jefe en la parte superior. Limpia enemigos, disparos, corazones y bombas.
-void GameEngine::iniciarJefe() {
+// Devuelve el JefeId que corresponde a esta oleada, o -1. Un jefe ya vencido
+// nunca vuelve a aparecer (el registro jefesVencidos lo impide). El Juego solo se
+// desbloquea cuando los cinco jefes anteriores estan marcados como vencidos.
+int GameEngine::jefeParaOleada(int oleada) const {
+    for (int i = 0; i < NUM_JEFES; i++) {
+        if (jefesVencidos[i]) continue;
+        if (oleada != HITOS_JEFE[i]) continue;
+        if (i == JEFE_JUEGO) {
+            for (int k = 0; k < JEFE_JUEGO; k++)
+                if (!jefesVencidos[k]) return -1;
+        }
+        return i;
+    }
+    return -1;
+}
+
+// Prepara la arena vacia y el jefe indicado, conservando vida y mejoras del
+// jugador y limpiando todo lo que hubiera del encuentro anterior.
+void GameEngine::iniciarJefe(int id) {
     jefeActivo = true;
-    jefeDerrotado = false;
+    jefeActual = id;
+    jefeAbatido = false;
+    corazonRoto = false;
     esperando = false;
     pausaOleada = 0;
     mapa = -1;
-    if (!arena.cargar("boss.txt")) arena.generarSoloBordes();
-
     enemigos.n = 0;
     proyectiles.n = 0;
     corazones.n = 0;
     bombas.n = 0;
+    muros.n = 0;
+    avisos.n = 0;
+    serpiente.activa = false;
+
+    // El jefe original conserva su arena con obstaculos; los nuevos jefes usan
+    // solo el borde para que su movimiento no quede trabado.
+    if (id == JEFE_ORIGINAL) {
+        if (!arena.cargar("boss.txt")) arena.generarSoloBordes();
+    }
+    else {
+        arena.generarSoloBordes();
+    }
 
     int px = ARENA_W / 2, py = ARENA_H - 4;
     jugador.pos[0] = jugador.prev[0] = aFijo(px);
@@ -2429,18 +3172,218 @@ void GameEngine::iniciarJefe() {
     jugador.vel[0] = jugador.vel[1] = 0;
     jugador.inmune = INMUNE_JUGADOR;
 
-    Jefe::agregar(enemigos, aFijo(ARENA_W / 2 - 1), aFijo(3));
+    switch (id) {
+    case JEFE_ORIGINAL:
+        Jefe::agregar(enemigos, aFijo(ARENA_W / 2 - 1), aFijo(3));
+        break;
+    case JEFE_SERPIENTE:
+        serpiente.reiniciar(ARENA_W / 2, ARENA_H / 2 - 3, DERECHA);
+        break;
+    case JEFE_COPIA:
+        Copia::agregar(enemigos, aFijo(ARENA_W / 2), aFijo(4));
+        break;
+    case JEFE_MIMICO: {
+        int cx = ARENA_W / 2, cy = 4;
+        arena.libreCerca(cx, cy);
+        Mimico::agregar(enemigos, aFijo(cx), aFijo(cy));
+        Mimico::clonar(enemigos, arena);
+        break;
+    }
+    case JEFE_ROBOT:
+        Robot::agregar(enemigos, aFijo(ARENA_W / 2), aFijo(4));
+        break;
+    case JEFE_JUEGO:
+        iniciarJuegoFinal();
+        break;
+    default:
+        break;
+    }
 }
 
-// El jefe murio: se eliminan sus amenazas y se pasa a la pantalla de victoria.
+// Jefe vencido: se registra la derrota, se limpian sus amenazas y las oleadas
+// normales continuan desde la misma oleada + 1.
 void GameEngine::terminarJefe() {
+    if (jefeActual >= 0 && jefeActual < NUM_JEFES) jefesVencidos[jefeActual] = true;
     jefeActivo = false;
-    jefeDerrotado = true;
+    jefeActual = -1;
+    jefeAbatido = false;
+    serpiente.activa = false;
     enemigos.n = 0;
     proyectiles.n = 0;
     corazones.n = 0;
     bombas.n = 0;
-    estados.victoria();
+    muros.n = 0;
+    avisos.n = 0;
+    esperando = true;
+    pausaOleada = 60;
+    estados.forzarJugando();
+    siguienteMapa();
+}
+
+// Vida y nombre del jefe en curso, para la barra del HUD.
+void GameEngine::vidaDelJefe(int& vida, int& vidaMax, const char** nombre) const {
+    static const char* nombres[NUM_JEFES] = {
+        "El Guardian", "La Serpiente", "La Copia", "El Mago Mimico", "El Robot", "EL JUEGO"
+    };
+    vida = 0;
+    vidaMax = 0;
+    *nombre = "";
+    if (jefeActual < 0) return;
+    *nombre = nombres[jefeActual];
+    if (jefeActual == JEFE_SERPIENTE) {
+        vida = serpiente.vida;
+        vidaMax = serpiente.vidaMax;
+        return;
+    }
+    int buscado = CORAZON_JUEGO;
+    int max = VIDA_CORAZON_JUEGO;
+    switch (jefeActual) {
+    case JEFE_ORIGINAL: buscado = JEFE;    max = VIDA_JEFE;    break;
+    case JEFE_COPIA:    buscado = COPIA;   max = VIDA_COPIA;   break;
+    case JEFE_MIMICO:   buscado = MIMICO;  max = VIDA_MIMICO;  break;
+    case JEFE_ROBOT:    buscado = ROBOT;   max = VIDA_ROBOT;   break;
+    default:            buscado = CORAZON_JUEGO; max = VIDA_CORAZON_JUEGO; break;
+    }
+    for (uint32_t i = 0; i < enemigos.n; i++) {
+        if (enemigos.tipo[i] != buscado) continue;
+        if (buscado == MIMICO && enemigos.aux[i] != 1) continue;   // solo el real
+        vida = enemigos.vida[i];
+        vidaMax = max;
+        break;
+    }
+}
+
+// Lineas exactas del jefe final (no se reescriben ni se censuran).
+static const char* LINEAS_LLEGADA[4] = {
+    "So you've made it.",
+    "Didn't think you would make it here.",
+    "After all...",
+    "The quickest way to end a story is to KILL IT'S CREATOR!"
+};
+static const char* LINEAS_FINAL[4] = {
+    "well done...",
+    "But today I ain't the only one dying",
+    "tell me something... june",
+    "aren't you a part of this story as well?"
+};
+
+// El Juego: misma arena con bordes, pero todo se prepara para el cine de llegada.
+// El corazon y los muros aparecen recien cuando termina el dialogo.
+void GameEngine::iniciarJuegoFinal() {
+    jefeActivo = true;
+    jefeActual = JEFE_JUEGO;
+    jefeAbatido = false;
+    corazonRoto = false;
+    esperando = false;
+    pausaOleada = 0;
+    mapa = -1;
+    arena.generarSoloBordes();
+    enemigos.n = 0;
+    proyectiles.n = 0;
+    corazones.n = 0;
+    bombas.n = 0;
+    muros.n = 0;
+    avisos.n = 0;
+    serpiente.activa = false;
+
+    int px = ARENA_W / 2, py = ARENA_H - 4;
+    jugador.pos[0] = jugador.prev[0] = aFijo(px);
+    jugador.pos[1] = jugador.prev[1] = aFijo(py);
+    jugador.vel[0] = jugador.vel[1] = 0;
+    jugador.inmune = INMUNE_JUGADOR;
+
+    rojoBorde = 0;
+    cineFase = 0;
+    cineTimer = 0;
+    cineLinea = 0;
+    estados.iniciarCine();
+}
+
+// El corazon llego a 0: se apagan todas las amenazas y empieza la despedida.
+void GameEngine::iniciarCineFinal() {
+    jefeAbatido = false;
+    corazonRoto = false;
+    enemigos.n = 0;
+    proyectiles.n = 0;
+    corazones.n = 0;
+    bombas.n = 0;
+    muros.n = 0;
+    avisos.n = 0;
+    cineFase = 1;
+    cineTimer = 0;
+    cineLinea = 0;
+    rojoBorde = 100;
+    estados.iniciarCine();
+}
+
+// Avance del cine: fundido de bordes a rojo y una linea de dialogo por vez. Al
+// terminar la llegada aparece el corazon; al terminar la despedida se apaga el
+// juego por completo (esa es la intencion narrativa, no hay menu posterior).
+void GameEngine::actualizarCine() {
+    if (cineFase < 0) return;
+    cineTimer++;
+
+    int rojo = cineTimer * 100 / CINE_FUNDIDO;
+    if (rojo > 100) rojo = 100;
+    if (rojo > rojoBorde) rojoBorde = rojo;
+
+    const int n = 4;
+    int t = cineTimer - CINE_ENTRADA;
+    if (t < 0) { cineLinea = 0; return; }
+    int l = t / CINE_LINEA;
+    if (l >= n) {
+        cineLinea = n - 1;
+        if (cineFase == 0) {
+            if (t >= n * CINE_LINEA + CINE_ANTES_DEL_COMBATE) {
+                // El combate empieza: corazon fijo en el centro y muros hostiles.
+                int hx = ARENA_W / 2, hy = ARENA_H / 2;
+                enemigos.agregar(CORAZON_JUEGO, VIDA_CORAZON_JUEGO, aFijo(hx), aFijo(hy), 0, 0);
+                for (int k = 0; k < MAX_MUROS; k++) {
+                    int cx = 0, cy = 0;
+                    for (int intento = 0; intento < 200; intento++) {
+                        cx = 1 + std::rand() % (ARENA_W - 3);
+                        cy = 1 + std::rand() % (ARENA_H - 2);
+                        if (!arena.esPared(cx, cy) && !arena.esPared(cx + 1, cy)) break;
+                    }
+                    int32_t vx = (std::rand() & 1) ? VEL_MURO_X : -VEL_MURO_X;
+                    int32_t vy = (std::rand() & 1) ? VEL_MURO_Y : -VEL_MURO_Y;
+                    if (muros.agregar(0, 1, aFijo(cx), aFijo(cy), vx, vy))
+                        muros.espera[muros.n - 1] = 45 + std::rand() % 60;
+                }
+                rojoBorde = 100;
+                cineFase = -1;
+                estados.cerrarCine();
+            }
+        }
+        else if (t >= n * CINE_LINEA + CINE_ANTES_DE_APAGAR) {
+            // Cierre: sin musica, sin juego, sin menu. ejecutar() restaura la
+            // terminal (endwin) y libera el audio al salir del bucle.
+            audio.detenerMusica();
+            salir = true;
+        }
+    }
+    else {
+        cineLinea = l;
+    }
+}
+
+// Capa extra: serpiente, muros hostiles y avisos de teletransporte.
+void GameEngine::pintarExtras() {
+    if (serpiente.activa && ASCIISpriteMgr::visible(serpiente.parpadeo)) {
+        for (int k = 0; k < serpiente.celdas; k++)
+            render.pintarCaracter(serpiente.cuerpo[k][0], serpiente.cuerpo[k][1],
+                                  k == 0 ? 'O' : 'o', k == 0 ? C_ROJO : C_MAGENTA);
+    }
+    for (uint32_t i = 0; i < muros.n; i++) {
+        int cx = aCelda(muros.pos[2 * i]), cy = aCelda(muros.pos[2 * i + 1]);
+        for (int d = 0; d < MURO_ANCHO; d++)
+            render.pintarCaracter(cx + d, cy, '#', C_ROJO);
+    }
+    for (uint32_t i = 0; i < avisos.n; i++) {
+        if ((avisos.espera[i] / 4) % 2 == 0) continue;
+        render.pintarCaracter(aCelda(avisos.pos[2 * i]), aCelda(avisos.pos[2 * i + 1]),
+                              '?', C_AMARILLO);
+    }
 }
 
 // Coloca una bomba en una celda libre, lejos del jugador y del jefe. El limite
@@ -2508,6 +3451,7 @@ void GameEngine::actualizarAudio() {
             break;
         case E_JUGANDO:
         case E_PAUSA:
+        case E_CINE:
             audio.reproducirMusica(jefeActivo ? Audio::MUSICA_JEFE : Audio::MUSICA_BATALLA);
             break;
         case E_TIENDA:
@@ -2538,6 +3482,7 @@ void GameEngine::pintar() {
         HUDManager::victoria(render, puntaje);
     }
     else {
+        bool cine = (e == E_CINE);
         DatosHUD d;
         d.vida = jugador.vida < 0 ? 0 : jugador.vida;
         d.vidaMax = jugador.vidaMax;
@@ -2549,15 +3494,28 @@ void GameEngine::pintar() {
         d.escudo = efectos.escudo;
         d.escudoListo = efectos.escudoListo;
         d.escudoTimer = efectos.escudoTimer;
-        d.jefe = jefeActivo;
+        // En la llegada del jefe final todavia no hay corazon: sin barra de jefe.
+        d.jefe = jefeActivo && !(jefeActual == JEFE_JUEGO && cineFase == 0);
         d.jefeVida = 0;
         d.jefeVidaMax = VIDA_JEFE;
-        for (uint32_t i = 0; i < enemigos.n; i++)
-            if (enemigos.tipo[i] == JEFE) d.jefeVida = enemigos.vida[i] < 0 ? 0 : enemigos.vida[i];
-        render.pintarArena(arena);
-        render.pintarEntidades(arena, jugador, enemigos, proyectiles, corazones);
-        render.pintarBombas(bombas);
-        HUDManager::dibujar(render, d);
+        d.jefeNombre = nullptr;
+        if (d.jefe) vidaDelJefe(d.jefeVida, d.jefeVidaMax, &d.jefeNombre);
+
+        render.pintarArena(arena, rojoBorde);
+        if (!(cine && cineFase == 1)) {
+            pintarExtras();
+            render.pintarEntidades(arena, jugador, enemigos, proyectiles, corazones);
+            render.pintarBombas(bombas);
+        }
+        if (!cine) HUDManager::dibujar(render, d);
+        if (cine) {
+            std::vector<std::string> lineas;
+            if (cineFase == 0)
+                for (int i = 0; i < 4; i++) lineas.push_back(LINEAS_LLEGADA[i]);
+            else if (cineFase == 1)
+                for (int i = 0; i < 4; i++) lineas.push_back(LINEAS_FINAL[i]);
+            HUDManager::dialogo(render, lineas, cineLinea);
+        }
         if (e == E_PAUSA) HUDManager::pausa(render);
         if (e == E_TIENDA) HUDManager::tienda(render, tienda, rondasCompletadas, oleadas.oleadaActual() + 1);
         if (e == E_FIN) HUDManager::derrota(render, d);
